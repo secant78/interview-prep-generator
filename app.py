@@ -17,8 +17,8 @@ PINECONE_INDEX = "interview-prep"
 EMBEDDING_MODEL = "text-embedding-004"
 EMBEDDING_DIM = 768
 CHAT_MODEL = "gemini-2.5-flash"
-OUTPUT_DIR = Path("output")
-OUTPUT_DIR.mkdir(exist_ok=True)
+BASE_OUTPUT_DIR = Path(r"C:\Users\Sean Cancino\Documents\interview-prep")
+BASE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DOC_OPTIONS = {
     "story":      "The Complete Story",
@@ -206,6 +206,11 @@ def page_generate():
         date_str = datetime.now().strftime("%m-%d-%y")
         company_slug = slugify(company)
 
+        # Create a new folder for this run: e.g. 05-30-26_Comcast
+        run_dir = BASE_OUTPUT_DIR / f"{date_str}_{company_slug}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        st.session_state.run_dir = str(run_dir)
+
         if "generated_docs" not in st.session_state:
             st.session_state.generated_docs = {}
 
@@ -219,7 +224,7 @@ def page_generate():
             full_content = header + content
 
             filename = f"{date_str}_{company_slug}_{key}.md"
-            filepath = OUTPUT_DIR / filename
+            filepath = run_dir / filename
             filepath.write_text(full_content, encoding="utf-8")
 
             st.session_state.generated_docs[key] = {
@@ -232,7 +237,7 @@ def page_generate():
             progress.progress((i + 1) / len(doc_keys))
 
         status.text("Done!")
-        st.success(f"Generated {len(doc_keys)} document(s).")
+        st.success(f"Generated {len(doc_keys)} document(s). Saved to: {run_dir}")
 
     # Show results + download buttons
     if st.session_state.get("generated_docs"):
