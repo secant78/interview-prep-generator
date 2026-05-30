@@ -241,8 +241,11 @@ def page_generate():
         if "generated_docs" not in st.session_state:
             st.session_state.generated_docs = {}
 
+        index = get_pinecone_index()
+        total_steps = len(doc_keys) * 2  # generate + index per doc
         progress = st.progress(0)
         status = st.empty()
+        step = 0
 
         for i, key in enumerate(doc_keys):
             status.text(f"Generating {DOC_OPTIONS[key]}...")
@@ -261,10 +264,20 @@ def page_generate():
                 "doc_type": key,
                 "date": date_str,
             }
-            progress.progress((i + 1) / len(doc_keys))
+            step += 1
+            progress.progress(step / total_steps)
+
+            status.text(f"Indexing {DOC_OPTIONS[key]}...")
+            ingest_doc(index, gemini, full_content, {
+                "company": company_slug,
+                "doc_type": key,
+                "date": date_str,
+            })
+            step += 1
+            progress.progress(step / total_steps)
 
         status.text("Done!")
-        st.success(f"Generated {len(doc_keys)} document(s). Saved to: {run_dir}")
+        st.success(f"Generated and indexed {len(doc_keys)} document(s). Saved to: {run_dir}")
 
     # Show results + download buttons
     if st.session_state.get("generated_docs"):
@@ -282,26 +295,6 @@ def page_generate():
                 )
                 st.markdown(doc["content"][:3000] + ("\n\n*...truncated for preview*" if len(doc["content"]) > 3000 else ""))
 
-        st.divider()
-        st.subheader("Index Documents for Chat")
-        st.caption("Indexes all generated documents into Pinecone so you can query them in the Chat tab.")
-
-        if st.button("Index into Pinecone", type="secondary"):
-            index = get_pinecone_index()
-            gemini = get_gemini()
-            total = 0
-            progress = st.progress(0)
-            docs = list(st.session_state.generated_docs.values())
-            for i, doc in enumerate(docs):
-                meta = {
-                    "company": doc["company"],
-                    "doc_type": doc["doc_type"],
-                    "date": doc["date"],
-                }
-                count = ingest_doc(index, gemini, doc["content"], meta)
-                total += count
-                progress.progress((i + 1) / len(docs))
-            st.success(f"Indexed {total} chunks into Pinecone.")
 
 
 # ── Page: Chat ────────────────────────────────────────────────────────────────
