@@ -1,0 +1,353 @@
+SYSTEM_BASE = """You are an expert career coach and technical interview strategist. Your job is to create deeply personalized, operationally specific interview preparation documents for software engineers and DevOps/cloud engineers. You write with confidence and specificity — no vague filler, no generic advice. Every story you craft is grounded in the candidate's actual resume and the target job description."""
+
+
+# ---------------------------------------------------------------------------
+# Document 1: The Faceless Story
+# ---------------------------------------------------------------------------
+
+STORY_DOC_PROMPT = """Using the resume and job description below, write THE COMPLETE STORY document — a narrative interview prep guide that positions the candidate as the ideal hire.
+
+RESUME:
+{resume}
+
+JOB DESCRIPTION:
+{job_desc}
+
+---
+
+Generate a full markdown document following this EXACT structure. Be thorough, specific, and use details from the resume. Every story must reference real companies, real tools, and real outcomes from the resume.
+
+# THE COMPLETE STORY
+## A Faceless Man's Declaration
+[Candidate full name]
+[Title from resume]
+[Years of experience summary]
+[Career progression line: Company1 → Company2 → ... → Current]
+Targeting: [Company] — [Role Title]
+Prepared: [Current month year]
+
+---
+
+## How to Use This Document
+[2-3 paragraphs explaining the strategic positioning for this specific role. Identify the 3-4 key requirements from the JD and map them directly to the candidate's experience. Call out any gaps and characterize them as narrow/manageable.]
+
+---
+
+## Chapter 1: The Arc
+
+### Your 30-Second Pitch
+[Write a 5-7 sentence pitch in first person. Mention years of experience, the 2-3 most relevant skills for this role, specific migration/platform work, and end with why this specific role is the right next step. Make it concrete — name tools, scale metrics, and outcomes.]
+
+### Why Each Move Made Sense
+[For each job transition in the resume, write a short paragraph explaining what the previous role gave the candidate and what the next role added. Format as: "PreviousCompany → NextCompany (year range)" with 3-4 sentences per transition. Thread the narrative toward the target role.]
+
+---
+
+## Chapter [N]: [Company Name] — [Memorable Subtitle]
+[Date range] | [Title] | [City, State]
+
+### The Platform Challenge
+[2-3 sentences setting the scene: what the company did, what the infrastructure challenge was, and why the stakes were high. This frames WHY the stories matter.]
+
+### Story 1: [Descriptive Title]
+[3-5 sentences explaining what you built/did, what the technical challenge was, and what the outcome was. Be specific: name the tools, the scale, the before/after.]
+
+### Story 2: [Descriptive Title]
+[Same format]
+
+### Story 3: [Descriptive Title] (if applicable)
+[Same format]
+
+[Repeat Chapter N for each job in the resume, most recent first after Rackspace/earliest role]
+
+---
+
+## Chapter [Last]: The Knowledge Gaps — How to Frame Them
+
+[For each AMBER/gap area identified from the JD vs resume, write a section:]
+### Gap [N]: [Topic]
+[How to frame it: write a first-person script the candidate can use verbatim. Start with what they DO have, acknowledge the gap honestly, then bridge to how they'd ramp quickly. 3-5 sentences.]
+
+[Also include: "What you now know:" — a bullet list of specific technical facts about this gap area that the candidate should be able to recite if pressed.]
+
+---
+
+## Chapter [N+1]: Danger Questions
+
+[For each of the 4-6 most likely hard questions for this specific role, write:]
+### Q: [The question]
+[A first-person answer the candidate can use. Be step-by-step for process questions. Be specific and operational. 8-15 sentences. Reference real stories from the resume where possible.]
+
+---
+
+## Chapter [N+2]: Before You Walk In
+### Five Things They Will Remember About You
+
+1. [The strongest differentiator — migration execution, platform work, etc. — stated as a bold claim with evidence from the resume.]
+
+2. [Second differentiator — usually the observability/tooling depth.]
+
+3. [Third differentiator — scale/team impact of the IaC or platform work.]
+
+4. [Fourth differentiator — foundational depth (Linux, security, etc.)]
+
+5. [Fifth differentiator — the security/compliance posture or unique angle.]
+
+---
+
+The Faceless Men would accept this story. Now make it yours.
+End of Story Document     Prepared: [Month Year]"""
+
+
+# ---------------------------------------------------------------------------
+# Document 2: Interview Prep Playbook
+# ---------------------------------------------------------------------------
+
+PLAYBOOK_PROMPT = """Using the resume and job description below, write a full INTERVIEW PREP PLAYBOOK document.
+
+RESUME:
+{resume}
+
+JOB DESCRIPTION:
+{job_desc}
+
+---
+
+Generate a full markdown document following this EXACT structure:
+
+# INTERVIEW PREP PLAYBOOK
+[Company] — [Role Title]
+Candidate: [Full Name]
+Prepared: [Month Year]
+
+---
+
+## Part 1: Gap Analysis
+
+Create a markdown table with columns: Area | Level | Evidence | Bridge if Asked
+
+- Area: each key technical skill from the JD
+- Level: GREEN (strong evidence), AMBER (present but not deep), RED (no evidence)
+- Evidence: specific proof from the resume (company, project, tool)
+- Bridge if Asked: one sentence the candidate can say if this comes up
+
+Include 8-12 rows covering all major JD requirements.
+
+After the table, write a 3-sentence summary: how many GREEN/AMBER/RED, what the strongest differentiator is, and what the one area to prepare bridges for is.
+
+---
+
+## Part 2: Platform Stories for Migration & DevOps
+
+Write 4-5 STAR-format stories drawn from the resume that directly address the core requirements of this role. For each story:
+
+### Story [N]: [Memorable Title]
+**Role:** [Title at that company]
+**Situation:** [1-2 sentences — what was broken, missing, or needed to change]
+**Task:** [1 sentence — your specific objective]
+**Action:**
+- [Bullet 1 — specific action with tool names]
+- [Bullet 2]
+- [Bullet 3]
+- [Bullet 4]
+**Result:** [2-3 sentences with concrete metrics: time saved, cost reduced, incidents eliminated, scale achieved]
+**[Target Company] hook:** "[One sentence connecting this story directly to what the target company is asking for — make it explicit]"
+
+---
+
+## Part 3: Technical Deep Dives
+
+Write "must know cold" technical content for the 4-5 most important technical areas in the JD. For each area, write in numbered steps or bullet lists — no paragraphs. This section is reference material, not narrative. Include:
+
+- Core workflow steps
+- Key objects/components with one-line explanations
+- Common failure modes and how to troubleshoot them
+- The "why not the alternative" reasoning
+
+---
+
+## Part 4: Red Flag Deflections
+
+For each likely objection or weakness (based on gaps between the resume and JD), write:
+
+**"[Paraphrased objection the interviewer might raise]"**
+"[First-person response the candidate can use. 3-5 sentences. Lead with what you DO have, bridge to the gap, close with confidence about ramp speed or transferability.]"
+
+---
+
+## Part 5: Opening Statement
+
+Write a 5-7 sentence opening statement in first person. It should:
+- Open with years of experience and the through-line of the career
+- Name the 2-3 most directly relevant accomplishments for this role
+- Reference specific companies and tools
+- Close by connecting explicitly to the target role
+
+---
+
+## Part 6: Strategic Questions for the Interviewer
+
+Write 6-8 questions the candidate should ask. Each question should:
+- Demonstrate knowledge of the role's specific challenges
+- Signal operational depth (not "what's your culture like")
+- Give the candidate information they actually need
+
+---
+
+## Part 7: Rapid-Reference Cheat Sheet
+
+### Key Metrics to Have Ready
+[Bullet list of 4-6 quantified outcomes from the resume — one per company/project]
+
+### Story-to-Question Mapping
+A markdown table: If they ask about... | Use this story
+
+### AMBER Area Quick Answers
+[Bullet list of 2-3 sentence bridges for each AMBER area — the fastest possible answer if asked cold]
+
+End of Interview Prep Playbook     Prepared: [Month Year]"""
+
+
+# ---------------------------------------------------------------------------
+# Document 3: Mock Q&A
+# ---------------------------------------------------------------------------
+
+MOCK_QA_PROMPT = """Using the resume and job description below, write a MOCK INTERVIEW Q&A document with 15 questions.
+
+RESUME:
+{resume}
+
+JOB DESCRIPTION:
+{job_desc}
+
+---
+
+Generate a full markdown document following this EXACT structure:
+
+# MOCK INTERVIEW Q&A
+[Company] — [Role Title]
+Format: Technical Interview | 15 Questions + Scoring Rubric
+Prepared: [Month Year]
+
+---
+
+## Interview Format
+[3-4 bullet points describing what the role centers on, drawn from the JD]
+
+Questions Q1–Q5 cover [core area 1] (core). Q6–Q10 cover [core area 2 and 3]. Q11–Q15 cover [scenarios and experience depth].
+
+---
+
+## SECTION A: [Core Area 1 from JD] (Core Knowledge)
+
+[5 questions — Q1 through Q5. For each:]
+
+### Q[N]. [The question — make it specific to this role, not generic]
+
+**Strong answer:**
+"[Write the complete answer in first person. This should be the answer a senior engineer who has done this work would give. Be specific, step-by-step where applicable, and reference patterns from the resume. 10-20 sentences. Include specific tool names, failure modes, and the 'why' behind decisions.]"
+
+Score 5 if: [what a complete answer includes — 3-4 criteria]
+Score 3 if: [what a partial answer looks like — 1-2 criteria]
+Score 1 if: [what a weak answer looks like]
+
+---
+
+## SECTION B: [Core Area 2 and 3 from JD] (Core Knowledge)
+
+[5 questions — Q6 through Q10. Same format as Section A.]
+
+---
+
+## SECTION C: Migration Scenarios & Experience Depth
+
+[5 questions — Q11 through Q15. Include at least one "tell me about a time" question, one multi-tier architecture scenario, one network troubleshooting scenario, and one decision-framework question. Same format.]
+
+---
+
+## Scoring Rubric
+
+Create a markdown table: Q | Topic | Target Score | AMBER/Notes
+
+- Target Score: 4+ for core areas, 3+ for supporting areas
+- AMBER/Notes: flag any question that maps to a resume gap, and note the bridging answer
+
+After the table, write 2-3 sentences on what the overall target score pattern should be.
+
+Scoring guide:
+- 5: Complete answer with operational depth and real examples
+- 4: Correct answer with most important details
+- 3: Correct answer with key gaps — acceptable for non-core areas
+- 2: Partially correct with significant gaps
+- 1: Incorrect or vague
+
+End of Mock Interview Q&A     Prepared: [Month Year]"""
+
+
+# ---------------------------------------------------------------------------
+# Document 4: Profile Narratives (STAR per company)
+# ---------------------------------------------------------------------------
+
+NARRATIVES_PROMPT = """Using the resume and job description below, write PROFILE NARRATIVES — STAR-format stories for each company, optimized for the target role.
+
+RESUME:
+{resume}
+
+JOB DESCRIPTION:
+{job_desc}
+
+---
+
+For each job in the resume (most recent 3-4 companies), write a STAR narrative following this format:
+
+## [Company Name]: **[Memorable Subtitle — what the main achievement was]**
+
+**Situation:** [2-3 sentences. What was the state of the infrastructure/platform when you arrived or when the project started? What was the business problem or risk?]
+
+**Task:** [1-2 sentences. What was your specific objective or responsibility?]
+
+**Action:**
+
+- **[Descriptive Sub-heading]:** [3-4 sentences explaining one major action you took. Name the specific tools, services, and design decisions. Be technical.]
+- **[Descriptive Sub-heading]:** [Same]
+- **[Descriptive Sub-heading]:** [Same]
+- **[Descriptive Sub-heading]:** [Same — include 3-4 action bullets per story]
+
+**Result:** [2-3 sentences. Quantified outcomes: percentage improvements, time saved, cost reduced, scale achieved, compliance passed, incidents eliminated. Connect back to the business impact.]
+
+[Repeat for each of the 3-4 most recent/relevant companies. Focus on the stories most relevant to the target JD.]"""
+
+
+# ---------------------------------------------------------------------------
+# Document 5: Tools Narratives
+# ---------------------------------------------------------------------------
+
+TOOLS_PROMPT = """Using the resume and job description below, write TOOLS NARRATIVES — specific, first-person answers for each major tool or technology listed in the JD.
+
+RESUME:
+{resume}
+
+JOB DESCRIPTION:
+{job_desc}
+
+---
+
+For each major tool/technology required by the JD, write a first-person narrative answer. These are what you would say if asked "Tell me about your experience with [tool]." Format as:
+
+### [Tool Name]:
+
+[3-5 sentences in first person. Include: which company you used it at, what you specifically built or operated with it, the scale or complexity of the work, and one specific technical detail that shows depth. Do NOT be generic. Every sentence should be falsifiable — meaning it references a real decision, real scale, or real outcome from the resume.]
+
+---
+
+Cover all tools listed in the JD skills/requirements section. For tools where the resume shows strong evidence, write 5-6 sentences with depth. For AMBER tools (present but not deep), write 3-4 sentences and include an honest bridge: acknowledge the depth is developing while leading with what you DO have.
+
+After all tool narratives, add a section:
+
+## Monitoring & Observability
+
+[Write the monitoring narrative as a response to "What monitoring tools have you used?" — name all the monitoring/observability tools from the resume with specific context for each.]
+
+## If Asked About [Gap Tool from JD]:
+
+[For any tool in the JD that is NOT on the resume but is listed as required or preferred, write an honest bridge answer. Lead with the closest analog you have, explain the transferability, and note you'd ramp quickly.]"""
