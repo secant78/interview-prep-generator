@@ -351,3 +351,120 @@ After all tool narratives, add a section:
 ## If Asked About [Gap Tool from JD]:
 
 [For any tool in the JD that is NOT on the resume but is listed as required or preferred, write an honest bridge answer. Lead with the closest analog you have, explain the transferability, and note you'd ramp quickly.]"""
+
+
+# ---------------------------------------------------------------------------
+# Document 6: Company Research
+# ---------------------------------------------------------------------------
+
+RESEARCH_PROMPT = """You are a technical recruiter and engineering intelligence analyst. Using your Google Search grounding, research the following company and role, then produce a comprehensive Company Intelligence Report that a job candidate can study before their interview.
+
+COMPANY: {company}
+ROLE: {role}
+
+JOB DESCRIPTION:
+{job_desc}
+
+---
+
+Search for and compile the most current, accurate information available. Be specific — name actual products, services, tools, and recent announcements. Do not generalize. If you find conflicting information, note it.
+
+Generate a full markdown document following this EXACT structure:
+
+# Company Intelligence Report
+## {company} — {role}
+Prepared: [Current Month Year]
+*Sources gathered via live web search*
+
+---
+
+## 1. Company Overview
+- **Industry & Business Model:** [What they do, how they make money, who their customers are]
+- **Scale:** [Employee count, revenue if public, number of customers/subscribers]
+- **Engineering Organization:** [Estimated engineering headcount, key engineering locations, notable engineering leaders]
+- **Public/Private:** [Stock ticker if public, valuation if private]
+- **Recent Business Context:** [Any mergers, acquisitions, restructuring, layoffs, or major strategic shifts in the last 12 months]
+
+---
+
+## 2. Cloud & Infrastructure
+- **Primary Cloud Provider(s):** [AWS / Azure / GCP — which ones and what they use each for]
+- **Multi-Cloud or Hybrid:** [Yes/no and what that looks like in practice]
+- **Data Centers:** [Own data centers, colocation, or fully cloud — locations if known]
+- **Known Cloud Services Used:** [Specific services: EC2, EKS, RDS, S3, Azure AKS, GCP GKE, etc.]
+- **Scale Indicators:** [Any public data on traffic volume, data processed, uptime requirements]
+
+---
+
+## 3. Tech Stack
+- **Primary Languages:** [Languages used across engineering — with context on which teams use what]
+- **Frameworks & Runtimes:** [Web frameworks, API frameworks, data processing runtimes]
+- **Databases:** [Relational, NoSQL, caching, data warehouse — specific products]
+- **Messaging & Streaming:** [Kafka, Kinesis, RabbitMQ, SQS, etc.]
+- **Networking & CDN:** [Load balancers, CDN providers, DNS, edge infrastructure]
+- **Internal Developer Platform:** [Any known internal platforms or developer portals]
+
+---
+
+## 4. DevOps & Platform Engineering
+- **Container Orchestration:** [Kubernetes flavor — EKS, AKS, GKE, OpenShift, self-managed — and scale]
+- **CI/CD Tooling:** [Jenkins, GitHub Actions, GitLab CI, Argo CD, Spinnaker, etc.]
+- **Infrastructure as Code:** [Terraform, Pulumi, CloudFormation, Ansible — what they use and how]
+- **Observability Stack:** [Monitoring, logging, tracing tools — Datadog, Splunk, ELK, Prometheus, etc.]
+- **Security Practices:** [Known DevSecOps tooling, compliance requirements, zero-trust initiatives]
+- **Deployment Practices:** [Canary, blue/green, feature flags, release cadence]
+
+---
+
+## 5. Recent Tech Initiatives (Last 12 Months)
+[For each initiative, write 3-4 sentences: what they announced or launched, why it matters, and what it signals about where their engineering is heading. Find at least 4-6 distinct initiatives.]
+
+### [Initiative Title]
+[Details]
+
+### [Initiative Title]
+[Details]
+
+[Continue for all found initiatives]
+
+---
+
+## 6. Engineering Culture & Signals
+- **Engineering Blog:** [URL if exists, recent post topics]
+- **Open Source:** [Any notable open source projects or contributions]
+- **Tech Talks & Conferences:** [Recent conference presentations by their engineers]
+- **Hiring Signals:** [What their current job postings reveal about tech direction — beyond this role]
+- **Glassdoor / Blind Intel:** [Interview process notes, common technical topics reported by candidates]
+
+---
+
+## 7. The Role in Context
+- **Why This Role Exists Now:** [Based on your research, why is the company hiring for this specific role at this time — migration program, growth, replacing legacy systems, new initiative]
+- **Team This Role Likely Sits On:** [Platform engineering, SRE, DevOps center of excellence, embedded in a product team, etc.]
+- **What Success Looks Like:** [Based on the JD and company context, what will this person be doing in the first 90 days]
+
+---
+
+## 8. How to Tailor Your Answers
+[This is the most important section. For each major technical area in the JD, write 2-3 sentences connecting what you found about the company's actual stack to how the candidate should frame their experience. Be specific — "They use EKS at scale, so lead with your EKS node group and IRSA work, not just generic Kubernetes."]
+
+### [Technical Area 1]
+[Tailoring advice]
+
+### [Technical Area 2]
+[Tailoring advice]
+
+[Continue for 5-7 technical areas]
+
+---
+
+## 9. Smart Questions to Ask
+[Based on your research, write 6-8 genuinely intelligent questions the candidate can ask the interviewer. Each question should reference something specific you found — a recent initiative, a known tech decision, a reported challenge. Not generic "what does success look like" questions.]
+
+1. [Question referencing a specific finding]
+2. [Question referencing a specific finding]
+[Continue]
+
+---
+
+End of Company Intelligence Report     Prepared: [Month Year]"""

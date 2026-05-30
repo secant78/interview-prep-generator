@@ -26,7 +26,11 @@ DOC_OPTIONS = {
     "mock_qa":    "Mock Interview Q&A",
     "narratives": "Profile Narratives",
     "tools":      "Tools Narratives",
+    "research":   "Company Research",
 }
+
+# Docs that don't require a resume upload
+RESUME_NOT_REQUIRED = {"research"}
 
 # ── Clients ──────────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -70,30 +74,21 @@ def slugify(text: str) -> str:
     return text.replace(" ", "_").replace("/", "-")
 
 
-def generate_doc(gemini_client, doc_key: str, resume: str, job_desc: str) -> str:
-    from prompts import SYSTEM_BASE
-    from prompts import (
-        STORY_DOC_PROMPT, PLAYBOOK_PROMPT, MOCK_QA_PROMPT,
-        NARRATIVES_PROMPT, TOOLS_PROMPT,
+def generate_doc(gemini_client, doc_key: str, resume: str, job_desc: str, company: str = "", role: str = "") -> str:
+    from generators import (
+        generate_story, generate_playbook, generate_mock_qa,
+        generate_narratives, generate_tools, generate_research,
     )
-    prompt_map = {
-        "story":      STORY_DOC_PROMPT,
-        "playbook":   PLAYBOOK_PROMPT,
-        "mock_qa":    MOCK_QA_PROMPT,
-        "narratives": NARRATIVES_PROMPT,
-        "tools":      TOOLS_PROMPT,
+    if doc_key == "research":
+        return generate_research(gemini_client, company, role, job_desc)
+    fn_map = {
+        "story":      generate_story,
+        "playbook":   generate_playbook,
+        "mock_qa":    generate_mock_qa,
+        "narratives": generate_narratives,
+        "tools":      generate_tools,
     }
-    prompt = prompt_map[doc_key].format(resume=resume, job_desc=job_desc)
-    response = gemini_client.models.generate_content(
-        model=CHAT_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_BASE,
-            max_output_tokens=65535,
-            temperature=0.7,
-        ),
-    )
-    return response.text
+    return fn_map[doc_key](gemini_client, resume, job_desc)
 
 
 def chunk_markdown(text: str, meta: dict) -> list[dict]:
@@ -200,9 +195,14 @@ def page_generate():
 
     doc_keys = [k for k, v in selected.items() if v]
 
-    if st.button("Generate", type="primary", disabled=not (resume_file and job_desc and company and role and doc_keys)):
+    needs_resume = any(k not in RESUME_NOT_REQUIRED for k in doc_keys)
+    ready = company and role and job_desc and doc_keys and (resume_file or not needs_resume)
+    if needs_resume and not resume_file:
+        st.caption("Upload a resume to generate the selected documents (not required for Company Research only).")
+
+    if st.button("Generate", type="primary", disabled=not ready):
         gemini = get_gemini()
-        resume_text = read_resume(resume_file)
+        resume_text = read_resume(resume_file) if resume_file else ""
         date_str = datetime.now().strftime("%m-%d-%y")
         company_slug = slugify(company)
 
@@ -214,7 +214,7 @@ def page_generate():
 
         for i, key in enumerate(doc_keys):
             status.text(f"Generating {DOC_OPTIONS[key]}...")
-            content = generate_doc(gemini, key, resume_text, job_desc)
+            content = generate_doc(gemini, key, resume_text, job_desc, company, role)
             header = f"<!-- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Company: {company} | Role: {role} -->\n\n"
             full_content = header + content
 

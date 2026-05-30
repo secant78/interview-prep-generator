@@ -7,6 +7,7 @@ from prompts import (
     MOCK_QA_PROMPT,
     NARRATIVES_PROMPT,
     TOOLS_PROMPT,
+    RESEARCH_PROMPT,
 )
 
 MODEL = "gemini-2.5-flash"
@@ -43,3 +44,18 @@ def generate_narratives(client: genai.Client, resume: str, job_desc: str) -> str
 
 def generate_tools(client: genai.Client, resume: str, job_desc: str) -> str:
     return _call(client, TOOLS_PROMPT.format(resume=resume, job_desc=job_desc))
+
+
+def generate_research(client: genai.Client, company: str, role: str, job_desc: str) -> str:
+    """Uses Gemini with Google Search grounding to research the company in real time."""
+    prompt = RESEARCH_PROMPT.format(company=company, role=role, job_desc=job_desc)
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            max_output_tokens=65535,
+            temperature=0.7,
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+        ),
+    )
+    return response.text
