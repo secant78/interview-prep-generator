@@ -109,17 +109,39 @@ def chunk_markdown(text: str, meta: dict) -> list[dict]:
     return chunks
 
 
+EMBED_DELAY = 6
+MAX_RETRIES = 5
+
+
+def embed_texts(gemini_client, texts: list[str]) -> list[list[float]]:
+    import time
+    all_embeddings = []
+    for i, text in enumerate(texts):
+        for attempt in range(MAX_RETRIES):
+            try:
+                result = gemini_client.models.embed_content(
+                    model=EMBEDDING_MODEL,
+                    contents=[text],
+                    config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
+                )
+                all_embeddings.append(result.embeddings[0].values)
+                break
+            except Exception as e:
+                if "429" in str(e) and attempt < MAX_RETRIES - 1:
+                    time.sleep(EMBED_DELAY * (2 ** attempt))
+                else:
+                    raise
+        if i < len(texts) - 1:
+            time.sleep(EMBED_DELAY)
+    return all_embeddings
+
+
 def ingest_doc(index, gemini_client, text: str, meta: dict) -> int:
     chunks = chunk_markdown(text, meta)
     if not chunks:
         return 0
     texts = [c["text"] for c in chunks]
-    result = gemini_client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=texts,
-        config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-    )
-    embeddings = [e.values for e in result.embeddings]
+    embeddings = embed_texts(gemini_client, texts)
     vectors = [
         {
             "id": f"{meta['company']}_{meta['doc_type']}_{meta['date']}_chunk{i}",
@@ -325,6 +347,115 @@ def page_chat():
         st.session_state.messages.append({"role": "assistant", "content": response})
 
 
+# ── Page: Analyze Video ───────────────────────────────────────────────────────
+def page_analyze():
+    from analyzer import analyze_video, get_mime, SUPPORTED_MIME
+
+    st.header("Analyze Interview Video")
+    st.caption(
+        "Upload a recorded interview video. Gemini will watch the full video and generate "
+        "a detailed feedback report covering body language, speech, content quality, and more. "
+        "For coding interviews it will also extract the question and evaluate your solution."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        company = st.text_input("Company (optional)", placeholder="e.g. Comcast", key="av_company")
+    with col2:
+        model_choice = st.selectbox(
+            "Model",
+            options=[
+                "gemini-2.0-flash",
+                "gemini-2.5-flash-preview-05-20",
+                "gemini-2.5-pro-preview-05-06",
+            ],
+            index=0,
+            key="av_model",
+            help="2.0 Flash: fastest & cheapest (~$0.05/30min). 2.5 Flash: better reasoning (~$0.07). 2.5 Pro: best quality (~$0.59).",
+        )
+
+    supported_exts = ", ".join(f".{e}" for e in SUPPORTED_MIME)
+    video_file = st.file_uploader(
+        f"Upload Interview Video ({supported_exts})",
+        type=list(SUPPORTED_MIME.keys()),
+        key="av_video",
+    )
+
+    if video_file:
+        size_mb = video_file.size / 1_000_000
+        st.info(f"📁 **{video_file.name}** — {size_mb:.0f} MB")
+
+    ready = video_file is not None
+    if st.button("Analyze Video", type="primary", disabled=not ready):
+        gemini = get_gemini()
+        status_box = st.empty()
+
+        def update_status(msg):
+            status_box.info(f"⏳ {msg}")
+
+        try:
+            video_bytes = video_file.read()
+            report = analyze_video(
+                client=gemini,
+                video_bytes=video_bytes,
+                filename=video_file.name,
+                model=model_choice,
+                status_callback=update_status,
+            )
+
+            status_box.success("Analysis complete!")
+
+            # Build filename and save to disk
+            date_str = datetime.now().strftime("%m-%d-%y")
+            company_slug = slugify(company) if company else "unknown"
+            video_stem = video_file.name.rsplit(".", 1)[0]
+            filename = f"{date_str}_{company_slug}_{video_stem}_analysis.md"
+
+            run_dir = BASE_OUTPUT_DIR / f"{date_str}_{company_slug}"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            filepath = run_dir / filename
+            filepath.write_text(report, encoding="utf-8")
+
+            st.session_state.video_report = {
+                "content": report,
+                "filename": filename,
+                "company": company_slug,
+                "doc_type": "video_analysis",
+                "date": date_str,
+            }
+
+        except Exception as e:
+            status_box.error(f"Error: {e}")
+
+    # Show report
+    if st.session_state.get("video_report"):
+        doc = st.session_state.video_report
+        st.divider()
+
+        col_dl, col_idx = st.columns([1, 1])
+        with col_dl:
+            st.download_button(
+                label="Download Report (.md)",
+                data=doc["content"],
+                file_name=doc["filename"],
+                mime="text/markdown",
+                key="av_download",
+            )
+        with col_idx:
+            if st.button("Index into Pinecone for Chat", key="av_index"):
+                index = get_pinecone_index()
+                gemini = get_gemini()
+                meta = {
+                    "company": doc["company"],
+                    "doc_type": doc["doc_type"],
+                    "date": doc["date"],
+                }
+                count = ingest_doc(index, gemini, doc["content"], meta)
+                st.success(f"Indexed {count} chunks. You can now chat with this report in the Chat tab.")
+
+        st.markdown(doc["content"])
+
+
 # ── App Shell ─────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Interview Prep Generator",
@@ -334,10 +465,13 @@ st.set_page_config(
 
 st.title("Interview Prep Generator")
 
-tab1, tab2 = st.tabs(["Generate Documents", "Chat"])
+tab1, tab2, tab3 = st.tabs(["Generate Documents", "Analyze Video", "Chat"])
 
 with tab1:
     page_generate()
 
 with tab2:
+    page_analyze()
+
+with tab3:
     page_chat()

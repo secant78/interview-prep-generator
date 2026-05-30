@@ -81,14 +81,34 @@ def chunk_markdown(text: str, source_meta: dict) -> list[dict]:
     return chunks
 
 
+EMBED_DELAY = 6        # seconds between each embedding call
+MAX_RETRIES = 5
+
+
 def embed_texts(gemini: genai.Client, texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts using Google text-embedding-004."""
-    result = gemini.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=texts,
-        config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-    )
-    return [e.values for e in result.embeddings]
+    """Embed one chunk at a time with delay and retry to respect rate limits."""
+    import time
+    all_embeddings = []
+    for i, text in enumerate(texts):
+        for attempt in range(MAX_RETRIES):
+            try:
+                result = gemini.models.embed_content(
+                    model=EMBEDDING_MODEL,
+                    contents=[text],
+                    config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
+                )
+                all_embeddings.append(result.embeddings[0].values)
+                break
+            except Exception as e:
+                if "429" in str(e) and attempt < MAX_RETRIES - 1:
+                    wait = EMBED_DELAY * (2 ** attempt)
+                    print(f"    Rate limited, waiting {wait}s before retry...")
+                    time.sleep(wait)
+                else:
+                    raise
+        if i < len(texts) - 1:
+            time.sleep(EMBED_DELAY)
+    return all_embeddings
 
 
 def ingest_file(path: Path, index, gemini: genai.Client) -> int:
@@ -101,6 +121,7 @@ def ingest_file(path: Path, index, gemini: genai.Client) -> int:
         return 0
 
     texts = [c["text"] for c in chunks]
+    print(f"    Embedding {len(chunks)} chunks...")
     embeddings = embed_texts(gemini, texts)
 
     vectors = []
@@ -155,7 +176,7 @@ def main():
     for path in sorted(md_files):
         print(f"  Processing {path.name}...")
         count = ingest_file(path, index, gemini)
-        print(f"  → {count} chunks indexed")
+        print(f"  -> {count} chunks indexed")
         total += count
 
     print(f"\nDone. {total} total chunks indexed into '{PINECONE_INDEX}'.")
