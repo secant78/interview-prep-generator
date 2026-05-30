@@ -14,8 +14,8 @@ load_dotenv()
 
 # ── Constants ────────────────────────────────────────────────────────────────
 PINECONE_INDEX = "interview-prep"
-EMBEDDING_MODEL = "text-embedding-004"
-EMBEDDING_DIM = 768
+EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_DIM = 3072
 CHAT_MODEL = "gemini-2.5-flash"
 BASE_OUTPUT_DIR = Path(r"C:\Users\Sean Cancino\Documents\interview-prep")
 BASE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -49,7 +49,12 @@ def get_pinecone_index():
         st.error("PINECONE_API_KEY not set in .env")
         st.stop()
     pc = Pinecone(api_key=key)
-    existing = [i.name for i in pc.list_indexes()]
+    existing = {i.name: i for i in pc.list_indexes()}
+    if PINECONE_INDEX in existing:
+        # Recreate if dimension doesn't match (e.g. embedding model changed)
+        if existing[PINECONE_INDEX].dimension != EMBEDDING_DIM:
+            pc.delete_index(PINECONE_INDEX)
+            existing.pop(PINECONE_INDEX)
     if PINECONE_INDEX not in existing:
         pc.create_index(
             name=PINECONE_INDEX,

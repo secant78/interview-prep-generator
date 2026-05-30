@@ -22,8 +22,8 @@ from pinecone import Pinecone, ServerlessSpec
 load_dotenv()
 
 PINECONE_INDEX = "interview-prep"
-EMBEDDING_MODEL = "text-embedding-004"
-EMBEDDING_DIM = 768
+EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_DIM = 3072
 
 
 def get_clients():
