@@ -405,7 +405,16 @@ def page_analyze():
 
             # Build filename and save to disk
             date_str = datetime.now().strftime("%m-%d-%y")
-            company_slug = slugify(company) if company else "unknown"
+            if company:
+                company_slug = slugify(company)
+            else:
+                # Extract company name from the report Gemini generated
+                detected = "Unknown"
+                for line in report.splitlines():
+                    if line.startswith("**Company:**"):
+                        detected = line.split("**Company:**", 1)[-1].strip()
+                        break
+                company_slug = slugify(detected) if detected.lower() != "unknown" else "Unknown"
             video_stem = video_file.name.rsplit(".", 1)[0]
             filename = f"{date_str}_{company_slug}_{video_stem}_analysis.md"
 

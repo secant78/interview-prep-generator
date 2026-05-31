@@ -92,6 +92,7 @@ Produce the report in this exact structure:
 
 # Interview Performance Report
 **Date analyzed:** {date}
+**Company:** [company name detected from video — logos, email domains, interviewer intro, screen content, etc. Write "Unknown" if not detectable]
 **Interview type:** [Behavioral / Technical / Coding / General — detect from video]
 **Overall rating:** [X/10]
 
