@@ -423,7 +423,15 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
 
     except Exception as e:
         import traceback
-        job["status"] = f"Error: {e}\n\n```\n{traceback.format_exc()}\n```"
+        err = str(e)
+        if "input token count exceeds" in err or "maximum number of tokens" in err:
+            job["status"] = (
+                "❌ **Video too long for this model.**\n\n"
+                "The video exceeds the model's context window (~60 min for 2.5 Flash).\n\n"
+                "**Fix:** Switch the Model dropdown to **gemini-2.5-pro** (supports up to ~128 min) and try again."
+            )
+        else:
+            job["status"] = f"Error: {e}\n\n```\n{traceback.format_exc()}\n```"
         job["state"] = "error"
 
 
