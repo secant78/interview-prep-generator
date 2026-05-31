@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import time
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +13,11 @@ from google.genai import types
 from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv()
+
+# Module-level store for background thread communication.
+# st.session_state is not reliably writable from background threads,
+# so we use a plain dict keyed by session ID instead.
+_analysis_jobs: dict[str, dict] = {}
 
 # ── Constants ────────────────────────────────────────────────────────────────
 PINECONE_INDEX = "interview-prep"
@@ -342,15 +348,18 @@ def page_chat():
 
 
 # ── Video analysis background worker ─────────────────────────────────────────
-def _run_analysis_thread(gemini, tmp_path, video_filename, model_choice, company):
-    """Runs in a background thread. Writes progress + results to st.session_state."""
-    import tempfile, shutil
+def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choice, company):
+    """
+    Runs in a background thread. Writes progress + results into `job` dict
+    (a plain Python dict, safe to write from any thread).
+    """
     from analyzer import analyze_video
 
     def update_status(msg):
-        st.session_state["av_status"] = msg
+        job["status"] = msg
 
     try:
+        update_status("Uploading video to Gemini...")
         report, transcript = analyze_video(
             client=gemini,
             video_path=tmp_path,
@@ -386,7 +395,14 @@ def _run_analysis_thread(gemini, tmp_path, video_filename, model_choice, company
         (run_dir / filename).write_text(report, encoding="utf-8")
         (run_dir / transcript_filename).write_text(transcript, encoding="utf-8")
 
-        st.session_state.video_report = {
+        # Index into Pinecone
+        update_status("Indexing report and transcript into Pinecone...")
+        index = get_pinecone_index()
+        base_meta = {"company": company_slug, "date": date_str}
+        report_count = ingest_doc(index, gemini, report, {**base_meta, "doc_type": "video_analysis"})
+        transcript_count = ingest_doc(index, gemini, transcript, {**base_meta, "doc_type": "video_transcript"})
+
+        job["result"] = {
             "content": report,
             "filename": filename,
             "transcript": transcript,
@@ -396,28 +412,20 @@ def _run_analysis_thread(gemini, tmp_path, video_filename, model_choice, company
             "date": date_str,
             "run_dir": str(run_dir),
         }
-
-        # Index into Pinecone
-        update_status("Indexing report and transcript into Pinecone...")
-        index = get_pinecone_index()
-        base_meta = {"company": company_slug, "date": date_str}
-        report_count = ingest_doc(index, gemini, report, {**base_meta, "doc_type": "video_analysis"})
-        transcript_count = ingest_doc(index, gemini, transcript, {**base_meta, "doc_type": "video_transcript"})
-
-        st.session_state["av_status"] = (
+        job["status"] = (
             f"Done! Saved to {run_dir} and indexed "
             f"({report_count + transcript_count} chunks) — ask questions in the Chat tab."
         )
-        st.session_state["av_state"] = "done"
+        job["state"] = "done"
 
     except Exception as e:
-        st.session_state["av_status"] = f"Error: {e}"
-        st.session_state["av_state"] = "error"
+        job["status"] = f"Error: {e}"
+        job["state"] = "error"
 
 
 # ── Page: Analyze Video ───────────────────────────────────────────────────────
 def page_analyze():
-    import tempfile, shutil, threading
+    import tempfile, shutil
     from analyzer import get_mime, SUPPORTED_MIME
 
     st.header("Analyze Interview Video")
@@ -454,40 +462,51 @@ def page_analyze():
         size_mb = video_file.size / 1_000_000
         st.info(f"📁 **{video_file.name}** — {size_mb:.0f} MB")
 
-    av_state = st.session_state.get("av_state", "idle")
-    ready = video_file is not None and av_state != "running"
+    # Use a stable job ID stored in session state
+    job_id = st.session_state.get("av_job_id")
+    job = _analysis_jobs.get(job_id, {}) if job_id else {}
+    job_state = job.get("state", "idle")
+
+    ready = video_file is not None and job_state != "running"
 
     if st.button("Analyze Video", type="primary", disabled=not ready):
-        # Save uploaded file to disk before starting thread
+        # Save uploaded file to disk synchronously, then hand off to thread
         suffix = "." + video_file.name.rsplit(".", 1)[-1]
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         shutil.copyfileobj(video_file, tmp)
         tmp.close()
 
-        st.session_state["av_state"] = "running"
-        st.session_state["av_status"] = "Starting..."
+        # Create a new job entry
+        new_job_id = str(time.time())
+        new_job = {"state": "running", "status": "Starting...", "result": None}
+        _analysis_jobs[new_job_id] = new_job
+        st.session_state["av_job_id"] = new_job_id
 
         gemini = get_gemini()
         thread = threading.Thread(
             target=_run_analysis_thread,
-            args=(gemini, tmp.name, video_file.name, model_choice, company),
+            args=(new_job, gemini, tmp.name, video_file.name, model_choice, company),
             daemon=True,
         )
         thread.start()
         st.rerun()
 
+    # Sync job result into session state once done
+    if job.get("state") == "done" and job.get("result"):
+        st.session_state.video_report = job["result"]
+
     # Poll while running
-    if st.session_state.get("av_state") == "running":
-        status_msg = st.session_state.get("av_status", "Working...")
+    if job_state == "running":
+        status_msg = job.get("status", "Working...")
         with st.spinner(status_msg):
             time.sleep(3)
             st.rerun()
 
-    elif st.session_state.get("av_state") == "done":
-        st.success(st.session_state.get("av_status", "Done!"))
+    elif job_state == "done":
+        st.success(job.get("status", "Done!"))
 
-    elif st.session_state.get("av_state") == "error":
-        st.error(st.session_state.get("av_status", "An error occurred."))
+    elif job_state == "error":
+        st.error(job.get("status", "An error occurred."))
 
     # Show report
     if st.session_state.get("video_report"):
