@@ -419,7 +419,8 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
         job["state"] = "done"
 
     except Exception as e:
-        job["status"] = f"Error: {e}"
+        import traceback
+        job["status"] = f"Error: {e}\n\n```\n{traceback.format_exc()}\n```"
         job["state"] = "error"
 
 
@@ -470,15 +471,16 @@ def page_analyze():
     ready = video_file is not None and job_state != "running"
 
     if st.button("Analyze Video", type="primary", disabled=not ready):
-        # Save uploaded file to disk synchronously, then hand off to thread
+        # Copy uploaded file to disk (may take a moment for large files)
         suffix = "." + video_file.name.rsplit(".", 1)[-1]
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-        shutil.copyfileobj(video_file, tmp)
-        tmp.close()
+        with st.spinner("Saving video to disk..."):
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            shutil.copyfileobj(video_file, tmp)
+            tmp.close()
 
-        # Create a new job entry
+        # Create a new job entry in the module-level dict
         new_job_id = str(time.time())
-        new_job = {"state": "running", "status": "Starting...", "result": None}
+        new_job = {"state": "running", "status": "Starting analysis...", "result": None}
         _analysis_jobs[new_job_id] = new_job
         st.session_state["av_job_id"] = new_job_id
 
