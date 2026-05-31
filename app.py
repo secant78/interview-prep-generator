@@ -505,9 +505,9 @@ def page_analyze():
 
     if job_state == "running":
         status_msg = job.get("status", "Working...")
-        with st.spinner(status_msg):
-            time.sleep(3)
-            st.rerun()
+        st.info(f"⏳ {status_msg}")
+        time.sleep(3)
+        st.rerun()
 
     elif job_state == "done":
         if job.get("result"):
