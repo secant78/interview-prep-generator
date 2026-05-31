@@ -387,10 +387,15 @@ def page_analyze():
             status_box.info(f"⏳ {msg}")
 
         try:
-            video_bytes = video_file.read()
+            import tempfile, shutil
+            suffix = "." + video_file.name.rsplit(".", 1)[-1]
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                shutil.copyfileobj(video_file, tmp)
+                tmp_path = tmp.name
+
             report = analyze_video(
                 client=gemini,
-                video_bytes=video_bytes,
+                video_path=tmp_path,
                 filename=video_file.name,
                 model=model_choice,
                 status_callback=update_status,
@@ -403,6 +408,12 @@ def page_analyze():
             company_slug = slugify(company) if company else "unknown"
             video_stem = video_file.name.rsplit(".", 1)[0]
             filename = f"{date_str}_{company_slug}_{video_stem}_analysis.md"
+
+            # Clean up temp file
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
             run_dir = BASE_OUTPUT_DIR / f"{date_str}_{company_slug}"
             run_dir.mkdir(parents=True, exist_ok=True)
