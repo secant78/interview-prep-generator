@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -340,9 +341,84 @@ def page_chat():
         st.session_state.messages.append({"role": "assistant", "content": response})
 
 
+# ── Video analysis background worker ─────────────────────────────────────────
+def _run_analysis_thread(gemini, tmp_path, video_filename, model_choice, company):
+    """Runs in a background thread. Writes progress + results to st.session_state."""
+    import tempfile, shutil
+    from analyzer import analyze_video
+
+    def update_status(msg):
+        st.session_state["av_status"] = msg
+
+    try:
+        report, transcript = analyze_video(
+            client=gemini,
+            video_path=tmp_path,
+            filename=video_filename,
+            model=model_choice,
+            status_callback=update_status,
+        )
+
+        # Clean up temp file
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+        # Resolve company slug
+        date_str = datetime.now().strftime("%m-%d-%y")
+        if company:
+            company_slug = slugify(company)
+        else:
+            detected = "Unknown"
+            for line in report.splitlines():
+                if line.startswith("**Company:**"):
+                    detected = line.split("**Company:**", 1)[-1].strip()
+                    break
+            company_slug = slugify(detected) if detected.lower() != "unknown" else "Unknown"
+
+        video_stem = video_filename.rsplit(".", 1)[0]
+        filename = f"{date_str}_{company_slug}_{video_stem}_analysis.md"
+        transcript_filename = f"{date_str}_{company_slug}_{video_stem}_transcript.md"
+
+        run_dir = BASE_OUTPUT_DIR / f"{date_str}_{company_slug}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / filename).write_text(report, encoding="utf-8")
+        (run_dir / transcript_filename).write_text(transcript, encoding="utf-8")
+
+        st.session_state.video_report = {
+            "content": report,
+            "filename": filename,
+            "transcript": transcript,
+            "transcript_filename": transcript_filename,
+            "company": company_slug,
+            "doc_type": "video_analysis",
+            "date": date_str,
+            "run_dir": str(run_dir),
+        }
+
+        # Index into Pinecone
+        update_status("Indexing report and transcript into Pinecone...")
+        index = get_pinecone_index()
+        base_meta = {"company": company_slug, "date": date_str}
+        report_count = ingest_doc(index, gemini, report, {**base_meta, "doc_type": "video_analysis"})
+        transcript_count = ingest_doc(index, gemini, transcript, {**base_meta, "doc_type": "video_transcript"})
+
+        st.session_state["av_status"] = (
+            f"Done! Saved to {run_dir} and indexed "
+            f"({report_count + transcript_count} chunks) — ask questions in the Chat tab."
+        )
+        st.session_state["av_state"] = "done"
+
+    except Exception as e:
+        st.session_state["av_status"] = f"Error: {e}"
+        st.session_state["av_state"] = "error"
+
+
 # ── Page: Analyze Video ───────────────────────────────────────────────────────
 def page_analyze():
-    from analyzer import analyze_video, get_mime, SUPPORTED_MIME
+    import tempfile, shutil, threading
+    from analyzer import get_mime, SUPPORTED_MIME
 
     st.header("Analyze Interview Video")
     st.caption(
@@ -378,89 +454,40 @@ def page_analyze():
         size_mb = video_file.size / 1_000_000
         st.info(f"📁 **{video_file.name}** — {size_mb:.0f} MB")
 
-    ready = video_file is not None
+    av_state = st.session_state.get("av_state", "idle")
+    ready = video_file is not None and av_state != "running"
+
     if st.button("Analyze Video", type="primary", disabled=not ready):
+        # Save uploaded file to disk before starting thread
+        suffix = "." + video_file.name.rsplit(".", 1)[-1]
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        shutil.copyfileobj(video_file, tmp)
+        tmp.close()
+
+        st.session_state["av_state"] = "running"
+        st.session_state["av_status"] = "Starting..."
+
         gemini = get_gemini()
-        status_box = st.empty()
+        thread = threading.Thread(
+            target=_run_analysis_thread,
+            args=(gemini, tmp.name, video_file.name, model_choice, company),
+            daemon=True,
+        )
+        thread.start()
+        st.rerun()
 
-        def update_status(msg):
-            status_box.info(f"⏳ {msg}")
+    # Poll while running
+    if st.session_state.get("av_state") == "running":
+        status_msg = st.session_state.get("av_status", "Working...")
+        with st.spinner(status_msg):
+            time.sleep(3)
+            st.rerun()
 
-        try:
-            import tempfile, shutil
-            suffix = "." + video_file.name.rsplit(".", 1)[-1]
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                shutil.copyfileobj(video_file, tmp)
-                tmp_path = tmp.name
+    elif st.session_state.get("av_state") == "done":
+        st.success(st.session_state.get("av_status", "Done!"))
 
-            report, transcript = analyze_video(
-                client=gemini,
-                video_path=tmp_path,
-                filename=video_file.name,
-                model=model_choice,
-                status_callback=update_status,
-            )
-
-            status_box.success("Analysis complete!")
-
-            # Build filename and save to disk
-            date_str = datetime.now().strftime("%m-%d-%y")
-            if company:
-                company_slug = slugify(company)
-            else:
-                # Extract company name from the report Gemini generated
-                detected = "Unknown"
-                for line in report.splitlines():
-                    if line.startswith("**Company:**"):
-                        detected = line.split("**Company:**", 1)[-1].strip()
-                        break
-                company_slug = slugify(detected) if detected.lower() != "unknown" else "Unknown"
-            video_stem = video_file.name.rsplit(".", 1)[0]
-            filename = f"{date_str}_{company_slug}_{video_stem}_analysis.md"
-
-            # Clean up temp file
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
-
-            run_dir = BASE_OUTPUT_DIR / f"{date_str}_{company_slug}"
-            run_dir.mkdir(parents=True, exist_ok=True)
-
-            # Save analysis report
-            filepath = run_dir / filename
-            filepath.write_text(report, encoding="utf-8")
-
-            # Save transcript
-            transcript_filename = f"{date_str}_{company_slug}_{video_stem}_transcript.md"
-            transcript_filepath = run_dir / transcript_filename
-            transcript_filepath.write_text(transcript, encoding="utf-8")
-
-            st.session_state.video_report = {
-                "content": report,
-                "filename": filename,
-                "transcript": transcript,
-                "transcript_filename": transcript_filename,
-                "company": company_slug,
-                "doc_type": "video_analysis",
-                "date": date_str,
-            }
-
-            # Auto-index both report and transcript into Pinecone
-            update_status("Indexing report and transcript into Pinecone...")
-            index = get_pinecone_index()
-            base_meta = {"company": company_slug, "date": date_str}
-
-            report_count = ingest_doc(index, gemini, report, {**base_meta, "doc_type": "video_analysis"})
-            transcript_count = ingest_doc(index, gemini, transcript, {**base_meta, "doc_type": "video_transcript"})
-
-            status_box.success(
-                f"Done! Report + transcript saved to {run_dir} and indexed "
-                f"({report_count + transcript_count} chunks total) — ask questions in the Chat tab."
-            )
-
-        except Exception as e:
-            status_box.error(f"Error: {e}")
+    elif st.session_state.get("av_state") == "error":
+        st.error(st.session_state.get("av_status", "An error occurred."))
 
     # Show report
     if st.session_state.get("video_report"):
