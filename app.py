@@ -446,13 +446,13 @@ def page_analyze():
         model_choice = st.selectbox(
             "Model",
             options=[
-                "gemini-2.0-flash",
-                "gemini-2.5-flash-preview-05-20",
-                "gemini-2.5-pro-preview-05-06",
+                "gemini-2.0-flash-lite",
+                "gemini-2.5-flash",
+                "gemini-2.5-pro",
             ],
-            index=0,
+            index=1,
             key="av_model",
-            help="2.0 Flash: fastest & cheapest (~$0.05/30min). 2.5 Flash: better reasoning (~$0.07). 2.5 Pro: best quality (~$0.59).",
+            help="2.0 Flash Lite: cheapest (~$0.03/30min). 2.5 Flash: best value (~$0.08, recommended). 2.5 Pro: highest quality (~$1.25).",
         )
 
     supported_exts = ", ".join(f".{e}" for e in SUPPORTED_MIME)

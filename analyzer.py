@@ -312,7 +312,7 @@ def analyze_video(
     client: genai.Client,
     video_path: str,
     filename: str,
-    model: str = "gemini-2.0-flash",
+    model: str = "gemini-2.0-flash-lite",
     status_callback=None,
 ) -> tuple[str, str]:
     """
