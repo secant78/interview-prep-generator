@@ -482,6 +482,8 @@ def page_analyze():
 
     ready = video_file is not None and job_state != "running"
 
+    MAX_MINUTES = 60
+
     if st.button("Analyze Video", type="primary", disabled=not ready):
         try:
             # Copy uploaded file to disk
@@ -490,6 +492,22 @@ def page_analyze():
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
             shutil.copyfileobj(video_file, tmp)
             tmp.close()
+
+            # Check video duration before proceeding
+            import av as _av
+            with _av.open(tmp.name) as container:
+                duration_sec = container.duration / 1_000_000  # av uses microseconds
+            duration_min = duration_sec / 60
+
+            if duration_min > MAX_MINUTES:
+                os.unlink(tmp.name)
+                st.error(
+                    f"⛔ **Video is too long ({duration_min:.0f} min).** "
+                    f"Maximum supported length is **{MAX_MINUTES} minutes**.\n\n"
+                    f"Please trim the video to under {MAX_MINUTES} minutes and try again. "
+                    f"You can trim for free using the Windows Photos app (open video → Edit → Trim)."
+                )
+                st.stop()
 
             # Store job dict in session_state; pass same reference to thread
             new_job = {"state": "running", "status": "Starting analysis...", "result": None}
