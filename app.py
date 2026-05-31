@@ -17,7 +17,10 @@ load_dotenv()
 # Module-level store for background thread communication.
 # st.session_state is not reliably writable from background threads,
 # so we use a plain dict keyed by session ID instead.
-_analysis_jobs: dict[str, dict] = {}
+# Removed: _analysis_jobs was a module-level dict but Streamlit reloads
+# modules on every rerun, wiping it. Job dicts now live in st.session_state
+# and are passed by reference to background threads, so thread writes are
+# visible on the next rerun without any module-level state.
 
 # ── Constants ────────────────────────────────────────────────────────────────
 PINECONE_INDEX = "interview-prep"
@@ -463,41 +466,43 @@ def page_analyze():
         size_mb = video_file.size / 1_000_000
         st.info(f"📁 **{video_file.name}** — {size_mb:.0f} MB")
 
-    # Use a stable job ID stored in session state
-    job_id = st.session_state.get("av_job_id")
-    job = _analysis_jobs.get(job_id, {}) if job_id else {}
+    # Job dict lives in session_state so it survives reruns.
+    # The background thread holds a reference to the same dict object,
+    # so its writes are visible here on the next poll.
+    job = st.session_state.get("av_job", {})
     job_state = job.get("state", "idle")
 
     ready = video_file is not None and job_state != "running"
 
     if st.button("Analyze Video", type="primary", disabled=not ready):
-        # Copy uploaded file to disk (may take a moment for large files)
-        suffix = "." + video_file.name.rsplit(".", 1)[-1]
-        with st.spinner("Saving video to disk..."):
+        try:
+            # Copy uploaded file to disk
+            suffix = "." + video_file.name.rsplit(".", 1)[-1]
+            video_file.seek(0)
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
             shutil.copyfileobj(video_file, tmp)
             tmp.close()
 
-        # Create a new job entry in the module-level dict
-        new_job_id = str(time.time())
-        new_job = {"state": "running", "status": "Starting analysis...", "result": None}
-        _analysis_jobs[new_job_id] = new_job
-        st.session_state["av_job_id"] = new_job_id
+            # Store job dict in session_state; pass same reference to thread
+            new_job = {"state": "running", "status": "Starting analysis...", "result": None}
+            st.session_state["av_job"] = new_job
 
-        gemini = get_gemini()
-        thread = threading.Thread(
-            target=_run_analysis_thread,
-            args=(new_job, gemini, tmp.name, video_file.name, model_choice, company),
-            daemon=True,
-        )
-        thread.start()
-        st.rerun()
+            gemini = get_gemini()
+            thread = threading.Thread(
+                target=_run_analysis_thread,
+                args=(new_job, gemini, tmp.name, video_file.name, model_choice, company),
+                daemon=True,
+            )
+            thread.start()
+            st.rerun()
+        except Exception as e:
+            import traceback
+            st.error(f"Failed to start analysis: {e}\n\n```\n{traceback.format_exc()}\n```")
 
-    # Sync job result into session state once done
-    if job.get("state") == "done" and job.get("result"):
-        st.session_state.video_report = job["result"]
+    # Re-read job from session_state each render (thread may have updated it)
+    job = st.session_state.get("av_job", {})
+    job_state = job.get("state", "idle")
 
-    # Poll while running
     if job_state == "running":
         status_msg = job.get("status", "Working...")
         with st.spinner(status_msg):
@@ -505,6 +510,8 @@ def page_analyze():
             st.rerun()
 
     elif job_state == "done":
+        if job.get("result"):
+            st.session_state.video_report = job["result"]
         st.success(job.get("status", "Done!"))
 
     elif job_state == "error":
