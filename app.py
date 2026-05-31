@@ -428,6 +428,17 @@ def page_analyze():
                 "date": date_str,
             }
 
+            # Auto-index into Pinecone
+            update_status("Indexing report into Pinecone...")
+            index = get_pinecone_index()
+            meta = {
+                "company": company_slug,
+                "doc_type": "video_analysis",
+                "date": date_str,
+            }
+            count = ingest_doc(index, gemini, report, meta)
+            status_box.success(f"Analysis complete! Report indexed ({count} chunks) — ask questions about it in the Chat tab.")
+
         except Exception as e:
             status_box.error(f"Error: {e}")
 
@@ -436,26 +447,13 @@ def page_analyze():
         doc = st.session_state.video_report
         st.divider()
 
-        col_dl, col_idx = st.columns([1, 1])
-        with col_dl:
-            st.download_button(
-                label="Download Report (.md)",
-                data=doc["content"],
-                file_name=doc["filename"],
-                mime="text/markdown",
-                key="av_download",
-            )
-        with col_idx:
-            if st.button("Index into Pinecone for Chat", key="av_index"):
-                index = get_pinecone_index()
-                gemini = get_gemini()
-                meta = {
-                    "company": doc["company"],
-                    "doc_type": doc["doc_type"],
-                    "date": doc["date"],
-                }
-                count = ingest_doc(index, gemini, doc["content"], meta)
-                st.success(f"Indexed {count} chunks. You can now chat with this report in the Chat tab.")
+        st.download_button(
+            label="Download Report (.md)",
+            data=doc["content"],
+            file_name=doc["filename"],
+            mime="text/markdown",
+            key="av_download",
+        )
 
         st.markdown(doc["content"])
 
