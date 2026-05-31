@@ -182,15 +182,44 @@ def get_mime(filename: str) -> str | None:
     return SUPPORTED_MIME.get(ext)
 
 
+TRANSCRIPT_PROMPT = """\
+Transcribe this interview video in full. Include every word spoken by all participants.
+
+Format the transcript exactly like this:
+
+# Interview Transcript
+
+## Speakers
+[List each speaker and their role, e.g. "Interviewer", "Candidate". Use names if audible.]
+
+---
+
+[HH:MM:SS] **Speaker**: Exact words spoken here.
+
+[HH:MM:SS] **Speaker**: Next line of dialogue.
+
+Rules:
+- Use [HH:MM:SS] timestamps at the start of every new speaker turn, and also every ~30 seconds \
+within a long continuous speech.
+- Label speakers consistently (e.g. always "Interviewer" or "Candidate", or their actual name).
+- Transcribe exactly what was said — do not paraphrase or summarize.
+- Include filler words (um, uh, like) as spoken — they are important for analysis.
+- If speech is inaudible or unclear, write [inaudible] or [unclear].
+- If there is a long silence or pause, note it as [pause ~Xs].
+- Do not add any commentary or analysis — pure transcript only.
+"""
+
+
 def analyze_video(
     client: genai.Client,
     video_path: str,
     filename: str,
     model: str = "gemini-2.0-flash",
     status_callback=None,
-) -> str:
+) -> tuple[str, str]:
     """
-    Upload a video file to Gemini by path, run analysis, return Markdown report string.
+    Upload a video file to Gemini, run analysis + transcription.
+    Returns (report_markdown, transcript_markdown).
     status_callback(msg) is called with progress updates if provided.
     """
     def log(msg):
@@ -217,17 +246,24 @@ def analyze_video(
     if video_file.state.name == "FAILED":
         raise RuntimeError(f"Gemini video processing failed: {video_file.state}")
 
-    log(f"Analyzing with {model}... (this may take 1–3 minutes)")
-    response = client.models.generate_content(
+    video_part = types.Part.from_uri(file_uri=video_file.uri, mime_type=mime)
+    gen_config = types.GenerateContentConfig(
+        temperature=0.3,
+        max_output_tokens=8192,
+    )
+
+    log("Generating analysis report...")
+    report_response = client.models.generate_content(
         model=model,
-        contents=[
-            types.Part.from_uri(file_uri=video_file.uri, mime_type=mime),
-            ANALYSIS_PROMPT,
-        ],
-        config=types.GenerateContentConfig(
-            temperature=0.3,
-            max_output_tokens=8192,
-        ),
+        contents=[video_part, ANALYSIS_PROMPT],
+        config=gen_config,
+    )
+
+    log("Generating transcript with timestamps...")
+    transcript_response = client.models.generate_content(
+        model=model,
+        contents=[video_part, TRANSCRIPT_PROMPT],
+        config=gen_config,
     )
 
     # Clean up file from Gemini servers
@@ -236,5 +272,5 @@ def analyze_video(
     except Exception:
         pass
 
-    log("Analysis complete.")
-    return response.text
+    log("Done.")
+    return report_response.text, transcript_response.text

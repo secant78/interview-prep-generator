@@ -393,7 +393,7 @@ def page_analyze():
                 shutil.copyfileobj(video_file, tmp)
                 tmp_path = tmp.name
 
-            report = analyze_video(
+            report, transcript = analyze_video(
                 client=gemini,
                 video_path=tmp_path,
                 filename=video_file.name,
@@ -426,27 +426,38 @@ def page_analyze():
 
             run_dir = BASE_OUTPUT_DIR / f"{date_str}_{company_slug}"
             run_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save analysis report
             filepath = run_dir / filename
             filepath.write_text(report, encoding="utf-8")
+
+            # Save transcript
+            transcript_filename = f"{date_str}_{company_slug}_{video_stem}_transcript.md"
+            transcript_filepath = run_dir / transcript_filename
+            transcript_filepath.write_text(transcript, encoding="utf-8")
 
             st.session_state.video_report = {
                 "content": report,
                 "filename": filename,
+                "transcript": transcript,
+                "transcript_filename": transcript_filename,
                 "company": company_slug,
                 "doc_type": "video_analysis",
                 "date": date_str,
             }
 
-            # Auto-index into Pinecone
-            update_status("Indexing report into Pinecone...")
+            # Auto-index both report and transcript into Pinecone
+            update_status("Indexing report and transcript into Pinecone...")
             index = get_pinecone_index()
-            meta = {
-                "company": company_slug,
-                "doc_type": "video_analysis",
-                "date": date_str,
-            }
-            count = ingest_doc(index, gemini, report, meta)
-            status_box.success(f"Analysis complete! Report indexed ({count} chunks) — ask questions about it in the Chat tab.")
+            base_meta = {"company": company_slug, "date": date_str}
+
+            report_count = ingest_doc(index, gemini, report, {**base_meta, "doc_type": "video_analysis"})
+            transcript_count = ingest_doc(index, gemini, transcript, {**base_meta, "doc_type": "video_transcript"})
+
+            status_box.success(
+                f"Done! Report + transcript saved to {run_dir} and indexed "
+                f"({report_count + transcript_count} chunks total) — ask questions in the Chat tab."
+            )
 
         except Exception as e:
             status_box.error(f"Error: {e}")
@@ -456,13 +467,23 @@ def page_analyze():
         doc = st.session_state.video_report
         st.divider()
 
-        st.download_button(
-            label="Download Report (.md)",
-            data=doc["content"],
-            file_name=doc["filename"],
-            mime="text/markdown",
-            key="av_download",
-        )
+        col_r, col_t = st.columns(2)
+        with col_r:
+            st.download_button(
+                label="Download Report (.md)",
+                data=doc["content"],
+                file_name=doc["filename"],
+                mime="text/markdown",
+                key="av_download",
+            )
+        with col_t:
+            st.download_button(
+                label="Download Transcript (.md)",
+                data=doc.get("transcript", ""),
+                file_name=doc.get("transcript_filename", "transcript.md"),
+                mime="text/markdown",
+                key="av_download_transcript",
+            )
 
         st.markdown(doc["content"])
 
