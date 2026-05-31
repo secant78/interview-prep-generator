@@ -1,6 +1,8 @@
 """
 Interview Video Analyzer
-Uploads a video to Gemini, runs analysis, returns a Markdown report.
+- Call 1 (video): transcript + visual analysis (eye contact, body language, posture, gestures, expressions)
+- Call 2 (text only): feed transcript to analyze filler words, answer quality, STAR method, coding question
+- Combine both into one final report
 """
 
 import time
@@ -20,96 +22,208 @@ SUPPORTED_MIME = {
     "mpg":  "video/mpeg",
 }
 
-ANALYSIS_PROMPT = """\
-You are an expert interview coach with deep experience evaluating candidates \
-across behavioral, technical, and coding interviews.
+# ── Call 1: Video prompt ──────────────────────────────────────────────────────
+# Covers everything that requires actually watching the video:
+# transcript + visual analysis only.
 
-Analyze this interview video thoroughly and produce a detailed feedback report \
-in Markdown format.
+VIDEO_PROMPT = """\
+You are an expert interview coach watching a recorded interview video.
+
+Your job has two parts. Produce both in a single response.
+
+---
+
+## PART 1 — FULL TRANSCRIPT
+
+Transcribe every word spoken by all participants.
+
+Format:
+
+# Interview Transcript
+
+## Speakers
+[List each speaker and their role. Use names if audible, otherwise "Interviewer" / "Candidate".]
+
+---
+
+[HH:MM:SS] **Speaker**: Exact words spoken here.
+
+Rules:
+- Timestamp every new speaker turn AND every ~30 seconds within a long continuous speech.
+- Transcribe exactly — do not paraphrase. Include filler words (um, uh, like, you know).
+- Mark inaudible sections as [inaudible]. Mark long silences as [pause ~Xs].
+
+---
+
+## PART 2 — VISUAL ANALYSIS
+
+Analyze ONLY what can be observed by watching the video (not the words spoken).
+Do NOT comment on speech content, filler words, or answer quality — that will be done separately.
+
+Detect the company from visual cues (logos, screen content, email domains, interviewer intro).
+
+Produce this section in Markdown:
+
+# Visual Analysis
+
+**Company:** [detected company name, or "Unknown"]
+**Interview type:** [Behavioral / Technical / Coding / General]
+
+### Body Language & Posture
+**Score: X/10**
+- Posture: [upright / slouched / mixed — with timestamps for notable moments]
+- Hand gestures: [purposeful / distracting / absent — with timestamps]
+- Fidgeting / nervous habits: [describe specific behaviors with timestamps]
+- Head nodding and active listening signals
+- Overall physical presence
+
+### Eye Contact
+**Score: X/10**
+- Consistency with camera/interviewer
+- Pattern of looking away (thinking vs nerves vs reading notes)
+- Notable timestamps where eye contact was strong or weak
+
+### Facial Expressions
+**Score: X/10**
+- Genuine vs forced smiles
+- Signs of nervousness or discomfort with timestamps
+- Expressiveness and engagement level
+- Resting expression during listening
+
+### Overall Visual Presence
+**Score: X/10**
+- First impression from body language alone
+- Confidence signals
+- Professional appearance
+""".strip()
+
+
+# ── Call 2: Text-only prompt ──────────────────────────────────────────────────
+# Fed the transcript as plain text. No video tokens consumed.
+
+TEXT_PROMPT_TEMPLATE = """\
+You are an expert interview coach. Below is a full timestamped transcript of a recorded interview.
+
+Analyze the transcript and produce a detailed text-based feedback report in Markdown.
+Focus ONLY on what can be evaluated from the words — do not comment on visuals.
 
 ---
 
 ## WHAT TO ANALYZE
 
-### 1. Body Language & Posture
-- Posture (upright vs slouched, leaning in vs back)
-- Hand gestures (purposeful vs distracting vs absent)
-- Fidgeting, nervous habits, self-touching
-- Head nodding and active listening signals
-- Overall physical presence and confidence
+### 1. Speech Patterns
+- Filler words: count every "um", "uh", "like", "you know", "so", "basically", "literally".
+  Give a total count and frequency (per minute estimate).
+- Speaking pace: estimated words per minute based on timestamps and word count.
+- Pauses: distinguish strategic pauses from silence caused by uncertainty.
+- Vocal variety clues from text (e.g. trailing off, incomplete sentences, repetition).
 
-### 2. Eye Contact
-- Eye contact with camera/interviewer (consistent, occasional, avoidant)
-- Looking away when thinking vs looking away due to nerves
-- Reading from notes or screen too often
+### 2. Answer Quality
+For each interview question asked:
+- Quote the question
+- Evaluate the answer: structure, clarity, conciseness, use of STAR method
+- Did the candidate directly answer the question or dodge/ramble?
+- Were examples specific or vague?
+- How did the candidate handle difficult or unexpected questions?
 
-### 3. Facial Expressions
-- Genuine vs forced smiles
-- Signs of nervousness or discomfort
-- Expressiveness and engagement
-- Resting expression during listening
+### 3. Overall Communication
+- Did the candidate ask good clarifying questions?
+- Did they summarize or recap their points well?
+- Were they concise or did they over-explain?
+- Did they recover well from stumbles?
 
-### 4. Speech Patterns
-- Pace (too fast, too slow, appropriate)
-- Filler words (um, uh, like, you know — count approximate frequency)
-- Clarity and articulation
-- Volume and projection
-- Pausing (strategic pauses vs dead silence from uncertainty)
-- Vocal variety vs monotone delivery
-
-### 5. Speech Content & Answer Quality
-- Answer structure (clear beginning, middle, end)
-- Use of STAR method or other frameworks where appropriate
-- Conciseness vs rambling
-- Specificity (concrete examples vs vague generalities)
-- Relevance to the question asked
-- Confidence in content delivery
-- Handling of difficult or unexpected questions
-
-### 6. Overall Interview Presence
-- First impression and energy level
-- Enthusiasm and genuine interest
-- Professional appropriateness
-- Rapport building with interviewer
-- Recovery from mistakes or stumbles
-
-### 7. Coding Interview (only if this is a coding interview)
+### 4. Coding Interview (only if this is a coding interview — skip entirely otherwise)
 - Extract the exact coding question(s) asked
-- Summarize the solution the candidate provided
-- Evaluate: did they clarify constraints before coding?
-- Evaluate: did they think out loud and explain their reasoning?
-- Evaluate: correctness of the solution
-- Evaluate: time/space complexity awareness
-- Evaluate: code quality and cleanliness
-- Evaluate: how they handled edge cases
-- Evaluate: how they responded to hints or follow-up questions
+- Summarize the candidate's solution
+- Did they clarify constraints before coding?
+- Did they think out loud?
+- Correctness of the solution
+- Time/space complexity awareness
+- Edge cases handled
+- How they responded to hints or follow-up questions
 
 ---
 
-## REPORT FORMAT
+## OUTPUT FORMAT
+
+# Text-Based Analysis
+
+### Speech Patterns
+**Score: X/10**
+**Filler word count:** [total] (~[X] per minute)
+**Breakdown:** um: X, uh: X, like: X, you know: X, so: X, other: X
+[Detailed feedback with example timestamps from the transcript]
+
+### Answer Quality
+**Score: X/10**
+
+**Q: "[question]"** `[timestamp]`
+[Evaluation of answer]
+
+*(repeat for each question)*
+
+### Overall Communication
+**Score: X/10**
+[Detailed feedback]
+
+### Coding Interview Details
+*(only if coding interview)*
+
+**Question Asked:**
+[Exact question]
+
+**Candidate's Solution:**
+[Description]
+
+**Evaluation:**
+- Correctness: ...
+- Approach: ...
+- Time complexity: ...
+- Space complexity: ...
+- Edge cases: ...
+- Communication while coding: ...
+
+---
+
+TRANSCRIPT:
+{transcript}
+""".strip()
+
+
+# ── Final report assembly prompt ──────────────────────────────────────────────
+
+COMBINE_PROMPT_TEMPLATE = """\
+You are an expert interview coach. You have two analysis documents for the same interview:
+
+1. Visual Analysis — covers body language, eye contact, facial expressions (from watching the video)
+2. Text Analysis — covers speech patterns, filler words, answer quality (from reading the transcript)
+
+Combine them into one unified, polished final report in Markdown. Do not repeat information unnecessarily.
+Cross-reference where relevant (e.g. "At [00:04:12] your body language tensed up AND your answer became vague").
 
 Produce the report in this exact structure:
 
 # Interview Performance Report
 **Date analyzed:** {date}
-**Company:** [company name detected from video — logos, email domains, interviewer intro, screen content, etc. Write "Unknown" if not detectable]
-**Interview type:** [Behavioral / Technical / Coding / General — detect from video]
-**Overall rating:** [X/10]
+**Company:** [from visual analysis]
+**Interview type:** [from visual analysis]
+**Overall rating:** [X/10 — weighted average across all dimensions]
 
 ---
 
 ## Executive Summary
-[3-5 sentence summary of overall performance]
+[4-6 sentences. What kind of candidate does this person come across as overall?
+Mention the strongest strength and most critical weakness.]
 
 ---
 
 ## What You Did Well ✓
-[Bullet list of specific strengths with timestamps where possible]
+[Bullet list — specific, with timestamps where available]
 
 ---
 
 ## What Needs Improvement ✗
-[Bullet list of specific weaknesses with timestamps where possible]
+[Bullet list — specific, with timestamps where available]
 
 ---
 
@@ -117,46 +231,46 @@ Produce the report in this exact structure:
 
 ### Body Language & Posture
 **Score: X/10**
-[Detailed feedback]
+[From visual analysis]
 
 ### Eye Contact
 **Score: X/10**
-[Detailed feedback]
+[From visual analysis]
 
 ### Facial Expressions
 **Score: X/10**
-[Detailed feedback]
+[From visual analysis]
 
 ### Speech Patterns
 **Score: X/10**
-[Detailed feedback — include approximate filler word count/frequency]
+[From text analysis — include filler word count and frequency]
 
-### Speech Content & Answer Quality
+### Answer Quality
 **Score: X/10**
-[Detailed feedback per answer/question if multiple questions asked]
+[From text analysis — per question breakdown]
 
 ### Overall Presence
 **Score: X/10**
-[Detailed feedback]
+[Combined impression]
 
 ---
 
 ## Coding Interview Details
-*(Include this section only if this is a coding interview — skip entirely otherwise)*
+*(Include only if this is a coding interview)*
 
 ### Question Asked
-[Exact or reconstructed question from the video]
+[Exact question]
 
 ### Candidate's Solution
-[Description or pseudocode of the solution provided]
+[Description]
 
 ### Solution Evaluation
-- **Correctness:** [correct / partially correct / incorrect — explain]
-- **Approach:** [brute force / optimal / near-optimal]
-- **Time complexity:** [what candidate said vs actual]
-- **Space complexity:** [what candidate said vs actual]
-- **Edge cases handled:** [yes / partially / no — which ones]
-- **Communication while coding:** [strong / adequate / weak]
+- **Correctness:**
+- **Approach:**
+- **Time complexity:**
+- **Space complexity:**
+- **Edge cases handled:**
+- **Communication while coding:**
 
 ---
 
@@ -174,40 +288,24 @@ Produce the report in this exact structure:
 
 ---
 *Report generated by Interview Prep Generator — Video Analyzer*
-""".format(date=datetime.now().strftime("%B %d, %Y"))
+
+---
+
+## SOURCE DOCUMENTS
+
+### Visual Analysis
+{visual_analysis}
+
+---
+
+### Text Analysis
+{text_analysis}
+""".strip()
 
 
 def get_mime(filename: str) -> str | None:
     ext = filename.rsplit(".", 1)[-1].lower()
     return SUPPORTED_MIME.get(ext)
-
-
-TRANSCRIPT_PROMPT = """\
-Transcribe this interview video in full. Include every word spoken by all participants.
-
-Format the transcript exactly like this:
-
-# Interview Transcript
-
-## Speakers
-[List each speaker and their role, e.g. "Interviewer", "Candidate". Use names if audible.]
-
----
-
-[HH:MM:SS] **Speaker**: Exact words spoken here.
-
-[HH:MM:SS] **Speaker**: Next line of dialogue.
-
-Rules:
-- Use [HH:MM:SS] timestamps at the start of every new speaker turn, and also every ~30 seconds \
-within a long continuous speech.
-- Label speakers consistently (e.g. always "Interviewer" or "Candidate", or their actual name).
-- Transcribe exactly what was said — do not paraphrase or summarize.
-- Include filler words (um, uh, like) as spoken — they are important for analysis.
-- If speech is inaudible or unclear, write [inaudible] or [unclear].
-- If there is a long silence or pause, note it as [pause ~Xs].
-- Do not add any commentary or analysis — pure transcript only.
-"""
 
 
 def analyze_video(
@@ -218,9 +316,12 @@ def analyze_video(
     status_callback=None,
 ) -> tuple[str, str]:
     """
-    Upload a video file to Gemini, run analysis + transcription.
+    Analyze an interview video using a cost-optimized 3-call strategy:
+      Call 1 (video)     — transcript + visual analysis
+      Call 2 (text only) — speech/content analysis from transcript
+      Call 3 (text only) — combine both into final report
+
     Returns (report_markdown, transcript_markdown).
-    status_callback(msg) is called with progress updates if provided.
     """
     def log(msg):
         if status_callback:
@@ -231,6 +332,7 @@ def analyze_video(
         ext = filename.rsplit(".", 1)[-1].lower()
         raise ValueError(f"Unsupported video format: .{ext}. Supported: {', '.join(SUPPORTED_MIME)}")
 
+    # ── Upload ────────────────────────────────────────────────────────────────
     log("Uploading video to Gemini...")
     with open(video_path, "rb") as f:
         video_file = client.files.upload(
@@ -247,30 +349,59 @@ def analyze_video(
         raise RuntimeError(f"Gemini video processing failed: {video_file.state}")
 
     video_part = types.Part.from_uri(file_uri=video_file.uri, mime_type=mime)
-    gen_config = types.GenerateContentConfig(
-        temperature=0.3,
-        max_output_tokens=8192,
-    )
 
-    log("Generating analysis report...")
-    report_response = client.models.generate_content(
+    # ── Call 1: Video → transcript + visual analysis ──────────────────────────
+    log("Call 1/3 — Generating transcript and visual analysis (watching video)...")
+    video_response = client.models.generate_content(
         model=model,
-        contents=[video_part, ANALYSIS_PROMPT],
-        config=gen_config,
+        contents=[video_part, VIDEO_PROMPT],
+        config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=8192),
     )
+    video_output = video_response.text
 
-    log("Generating transcript with timestamps...")
-    transcript_response = client.models.generate_content(
-        model=model,
-        contents=[video_part, TRANSCRIPT_PROMPT],
-        config=gen_config,
-    )
-
-    # Clean up file from Gemini servers
+    # Clean up video from Gemini servers — no longer needed
     try:
         client.files.delete(name=video_file.name)
     except Exception:
         pass
 
+    # Split the video output into transcript and visual analysis
+    # Both sections are clearly headed so we can split on the Visual Analysis header
+    if "# Visual Analysis" in video_output:
+        transcript_raw, visual_analysis = video_output.split("# Visual Analysis", 1)
+        visual_analysis = "# Visual Analysis" + visual_analysis
+    else:
+        transcript_raw = video_output
+        visual_analysis = video_output  # fallback — use full output for both
+
+    # Extract just the transcript portion (Part 1)
+    if "## PART 2" in transcript_raw:
+        transcript = transcript_raw.split("## PART 2")[0].strip()
+    else:
+        transcript = transcript_raw.strip()
+
+    # ── Call 2: Text only → speech + content analysis ─────────────────────────
+    log("Call 2/3 — Analyzing speech patterns and answer quality (text only)...")
+    text_response = client.models.generate_content(
+        model=model,
+        contents=TEXT_PROMPT_TEMPLATE.format(transcript=transcript),
+        config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=8192),
+    )
+    text_analysis = text_response.text
+
+    # ── Call 3: Text only → combine into final report ─────────────────────────
+    log("Call 3/3 — Assembling final report...")
+    combine_prompt = COMBINE_PROMPT_TEMPLATE.format(
+        date=datetime.now().strftime("%B %d, %Y"),
+        visual_analysis=visual_analysis,
+        text_analysis=text_analysis,
+    )
+    final_response = client.models.generate_content(
+        model=model,
+        contents=combine_prompt,
+        config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=8192),
+    )
+    report = final_response.text
+
     log("Done.")
-    return report_response.text, transcript_response.text
+    return report, transcript
