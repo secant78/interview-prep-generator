@@ -150,9 +150,10 @@ def transcribe_with_groq(audio_path: str, groq_api_key: str) -> str:
 
     lines = []
     for seg in result.segments:
-        t = seg.start
+        t = seg["start"] if isinstance(seg, dict) else seg.start
+        text = seg["text"] if isinstance(seg, dict) else seg.text
         h, m, s = int(t // 3600), int((t % 3600) // 60), int(t % 60)
-        lines.append(f"[{h:02d}:{m:02d}:{s:02d}] {seg.text.strip()}")
+        lines.append(f"[{h:02d}:{m:02d}:{s:02d}] {text.strip()}")
 
     return "\n".join(lines)
 
