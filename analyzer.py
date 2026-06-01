@@ -1,13 +1,22 @@
 """
-Interview Video Analyzer
-- Call 1 (video): transcript + visual analysis (eye contact, body language, posture, gestures, expressions)
-- Call 2 (text only): feed transcript to analyze filler words, answer quality, STAR method, coding question
-- Combine both into one final report
+Interview Video Analyzer — Hybrid Qwen + Gemini Strategy
+- Frame extraction  → Qwen2.5-VL  (visual analysis: body language, eye contact, posture)
+- Audio extraction  → Gemini       (transcription: full timestamped transcript)
+- Call 3 (text)    → Gemini       (speech + answer quality analysis from transcript)
+- Call 4 (text)    → Gemini       (combine visual + text into final report)
+- Call 5 (text)    → Gemini       (interview intelligence: Q&A, tools, concepts)
+
+Falls back to Gemini-only (video upload) if no DASHSCOPE_API_KEY is set.
 """
 
+import base64
+import os
+import tempfile
 import time
 from datetime import datetime
+from io import BytesIO
 
+import av
 from google import genai
 from google.genai import types
 
@@ -22,26 +31,156 @@ SUPPORTED_MIME = {
     "mpg":  "video/mpeg",
 }
 
-# ── Call 1: Video prompt ──────────────────────────────────────────────────────
-# Covers everything that requires actually watching the video:
-# transcript + visual analysis only.
+FRAMES_PER_SECOND = 0.125   # 1 frame every 8 seconds
+MAX_FRAMES        = 150      # cap for very long videos
+FRAME_WIDTH       = 640
+FRAME_HEIGHT      = 360
+FRAME_QUALITY     = 65       # JPEG quality
 
-VIDEO_PROMPT_TEMPLATE = """\
-You are an expert interview coach watching a recorded interview video.
 
-Your job has two parts. Produce both in a single response.
+# ── Frame & audio extraction ──────────────────────────────────────────────────
+
+def extract_frames(video_path: str) -> list[str]:
+    """Extract frames as base64 JPEG data-URIs at FRAMES_PER_SECOND."""
+    frames = []
+    interval = 1.0 / FRAMES_PER_SECOND
+
+    with av.open(video_path) as container:
+        stream = container.streams.video[0]
+        duration = float(container.duration or 0) / 1_000_000
+
+        next_t = 0.0
+        for frame in container.decode(stream):
+            t = float(frame.pts * stream.time_base)
+            if t < next_t:
+                continue
+            img = frame.to_image().resize((FRAME_WIDTH, FRAME_HEIGHT))
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=FRAME_QUALITY)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            frames.append(f"data:image/jpeg;base64,{b64}")
+            next_t = t + interval
+            if len(frames) >= MAX_FRAMES:
+                break
+
+    return frames
+
+
+def extract_audio(video_path: str) -> tuple[str | None, str | None]:
+    """
+    Extract audio track to a temp mp3 file.
+    Returns (file_path, mime_type) or (None, None) if no audio.
+    """
+    try:
+        with av.open(video_path) as container:
+            if not container.streams.audio:
+                return None, None
+
+        tmp = tempfile.mktemp(suffix=".mp3")
+        with av.open(video_path) as in_c:
+            in_audio = in_c.streams.audio[0]
+            with av.open(tmp, "w") as out_c:
+                out_audio = out_c.add_stream("libmp3lame", rate=16000)
+                out_audio.bit_rate = 64_000
+                for frame in in_c.decode(in_audio):
+                    frame.pts = None
+                    for pkt in out_audio.encode(frame):
+                        out_c.mux(pkt)
+                for pkt in out_audio.encode(None):
+                    out_c.mux(pkt)
+        return tmp, "audio/mpeg"
+
+    except Exception:
+        # mp3 codec unavailable — try wav fallback
+        try:
+            import wave, struct
+            tmp = tempfile.mktemp(suffix=".wav")
+            all_samples = []
+            sample_rate = 16000
+
+            with av.open(video_path) as in_c:
+                if not in_c.streams.audio:
+                    return None, None
+                in_audio = in_c.streams.audio[0]
+                for frame in in_c.decode(in_audio):
+                    rf = frame.reformat(sample_rate=sample_rate,
+                                        layout="mono", format="s16")
+                    arr = rf.to_ndarray().flatten().tolist()
+                    all_samples.extend(arr)
+
+            with wave.open(tmp, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(struct.pack(f"{len(all_samples)}h", *all_samples))
+
+            return tmp, "audio/wav"
+        except Exception:
+            return None, None
+
+
+# ── Qwen visual-only prompt ───────────────────────────────────────────────────
+
+VISUAL_ONLY_PROMPT = """\
+You are an expert interview coach reviewing a sequence of frames from a recorded interview video.
+
+IMPORTANT: You are seeing frames only — there is no audio. Do NOT comment on anything \
+speech-related (words, filler words, answers, questions). Focus exclusively on what is \
+visually observable.
+
+Interviewee: {interviewee_name}
+Interviewer: {interviewer_name}
+
+Detect the company from visual cues (logos, screen content, backgrounds, badges).
+
+Produce this section in Markdown:
+
+# Visual Analysis
+
+**Company:** [detected company name, or "Unknown"]
+**Interview type:** [Behavioral / Technical / Coding / General — infer from visual context]
+
+### Body Language & Posture
+**Score: X/10**
+- Posture: [upright / slouched / mixed — with frame timestamps or approximate times]
+- Hand gestures: [purposeful / distracting / absent]
+- Fidgeting / nervous habits: [describe with approximate timestamps]
+- Head nodding and active listening signals
+- Overall physical presence
+
+### Eye Contact
+**Score: X/10**
+- Consistency with camera/interviewer
+- Pattern of looking away (thinking vs nerves vs reading notes)
+- Notable moments where eye contact was strong or weak
+
+### Facial Expressions
+**Score: X/10**
+- Genuine vs forced smiles
+- Signs of nervousness or discomfort
+- Expressiveness and engagement level
+- Resting expression during listening
+
+### Overall Visual Presence
+**Score: X/10**
+- First impression from body language alone
+- Confidence signals
+- Professional appearance
+""".strip()
+
+
+# ── Gemini audio transcription prompt ────────────────────────────────────────
+
+TRANSCRIPT_PROMPT = """\
+You are an expert transcriptionist. Below is the audio from a recorded interview.
+
+Transcribe every word spoken by all participants.
 
 SPEAKER NAMES:
 - Interviewee (candidate): {interviewee_name}
 - Interviewer: {interviewer_name}
 
-Use these exact names throughout the entire transcript. Do NOT use generic labels like "Candidate", "Speaker 1", or "Speaker 2".
-
----
-
-## PART 1 — FULL TRANSCRIPT
-
-Transcribe every word spoken by all participants.
+Use these exact names throughout. Do NOT use "Candidate", "Speaker 1", or generic labels.
 
 Format:
 
@@ -60,54 +199,10 @@ Rules:
 - Transcribe exactly — do not paraphrase. Include filler words (um, uh, like, you know).
 - Mark inaudible sections as [inaudible]. Mark long silences as [pause ~Xs].
 - Always use {interviewee_name} and {interviewer_name} — never substitute with generic labels.
-
----
-
-## PART 2 — VISUAL ANALYSIS
-
-Analyze ONLY what can be observed by watching the video (not the words spoken).
-Do NOT comment on speech content, filler words, or answer quality — that will be done separately.
-
-Detect the company from visual cues (logos, screen content, email domains, interviewer intro).
-
-Produce this section in Markdown:
-
-# Visual Analysis
-
-**Company:** [detected company name, or "Unknown"]
-**Interview type:** [Behavioral / Technical / Coding / General]
-
-### Body Language & Posture
-**Score: X/10**
-- Posture: [upright / slouched / mixed — with timestamps for notable moments]
-- Hand gestures: [purposeful / distracting / absent — with timestamps]
-- Fidgeting / nervous habits: [describe specific behaviors with timestamps]
-- Head nodding and active listening signals
-- Overall physical presence
-
-### Eye Contact
-**Score: X/10**
-- Consistency with camera/interviewer
-- Pattern of looking away (thinking vs nerves vs reading notes)
-- Notable timestamps where eye contact was strong or weak
-
-### Facial Expressions
-**Score: X/10**
-- Genuine vs forced smiles
-- Signs of nervousness or discomfort with timestamps
-- Expressiveness and engagement level
-- Resting expression during listening
-
-### Overall Visual Presence
-**Score: X/10**
-- First impression from body language alone
-- Confidence signals
-- Professional appearance
 """.strip()
 
 
-# ── Call 2: Text-only prompt ──────────────────────────────────────────────────
-# Fed the transcript as plain text. No video tokens consumed.
+# ── Call 3: Text-only speech + content analysis ───────────────────────────────
 
 TEXT_PROMPT_TEMPLATE = """\
 You are an expert interview coach. Below is a full timestamped transcript of a recorded interview.
@@ -148,7 +243,6 @@ For each interview question asked:
 - Correctness of the solution
 - Time/space complexity awareness
 - Edge cases handled
-- How they responded to hints or follow-up questions
 
 ---
 
@@ -160,7 +254,7 @@ For each interview question asked:
 **Score: X/10**
 **Filler word count:** [total] (~[X] per minute)
 **Breakdown:** um: X, uh: X, like: X, you know: X, so: X, other: X
-[Detailed feedback with example timestamps from the transcript]
+[Detailed feedback with example timestamps]
 
 ### Answer Quality
 **Score: X/10**
@@ -177,20 +271,6 @@ For each interview question asked:
 ### Coding Interview Details
 *(only if coding interview)*
 
-**Question Asked:**
-[Exact question]
-
-**Candidate's Solution:**
-[Description]
-
-**Evaluation:**
-- Correctness: ...
-- Approach: ...
-- Time complexity: ...
-- Space complexity: ...
-- Edge cases: ...
-- Communication while coding: ...
-
 ---
 
 TRANSCRIPT:
@@ -198,18 +278,16 @@ TRANSCRIPT:
 """.strip()
 
 
-# ── Final report assembly prompt ──────────────────────────────────────────────
+# ── Call 4: Combine into final report ─────────────────────────────────────────
 
 COMBINE_PROMPT_TEMPLATE = """\
 You are an expert interview coach. You have two analysis documents for the same interview:
 
-1. Visual Analysis — covers body language, eye contact, facial expressions (from watching the video)
-2. Text Analysis — covers speech patterns, filler words, answer quality (from reading the transcript)
+1. Visual Analysis — covers body language, eye contact, facial expressions (from video frames)
+2. Text Analysis — covers speech patterns, filler words, answer quality (from audio transcript)
 
-Combine them into one unified, polished final report in Markdown. Do not repeat information unnecessarily.
-Cross-reference where relevant (e.g. "At [00:04:12] your body language tensed up AND your answer became vague").
-
-Produce the report in this exact structure:
+Combine them into one unified, polished final report in Markdown. Do not repeat information.
+Cross-reference where relevant (e.g. "At ~4:12 your body language tensed AND your answer became vague").
 
 # Interview Performance Report
 **Date analyzed:** {date}
@@ -220,8 +298,7 @@ Produce the report in this exact structure:
 ---
 
 ## Executive Summary
-[4-6 sentences. What kind of candidate does this person come across as overall?
-Mention the strongest strength and most critical weakness.]
+[4-6 sentences. Strongest strength and most critical weakness.]
 
 ---
 
@@ -264,21 +341,7 @@ Mention the strongest strength and most critical weakness.]
 ---
 
 ## Coding Interview Details
-*(Include only if this is a coding interview)*
-
-### Question Asked
-[Exact question]
-
-### Candidate's Solution
-[Description]
-
-### Solution Evaluation
-- **Correctness:**
-- **Approach:**
-- **Time complexity:**
-- **Space complexity:**
-- **Edge cases handled:**
-- **Communication while coding:**
+*(Include only if coding interview)*
 
 ---
 
@@ -295,9 +358,6 @@ Mention the strongest strength and most critical weakness.]
 [Concrete, specific exercises or practices for each priority improvement]
 
 ---
-*Report generated by Interview Prep Generator — Video Analyzer*
-
----
 
 ## SOURCE DOCUMENTS
 
@@ -311,13 +371,13 @@ Mention the strongest strength and most critical weakness.]
 """.strip()
 
 
-# ── Call 4: Interview Intelligence document ───────────────────────────────────
+# ── Call 5: Interview Intelligence ────────────────────────────────────────────
 
 INTEL_PROMPT_TEMPLATE = """\
 You are an expert interview analyst. Below is the full transcript of a recorded interview.
 
 Extract and organize the following information into a structured Interview Intelligence document.
-Be thorough and specific — pull exact quotes, exact tool names, and exact question wording from the transcript.
+Be thorough and specific — pull exact quotes, exact tool names, and exact question wording.
 
 ---
 
@@ -326,11 +386,9 @@ TRANSCRIPT:
 
 ---
 
-Produce the document in this exact Markdown structure:
-
 # Interview Intelligence Report
 **Date:** {date}
-**Company:** [Extract from transcript. Look for company name mentioned by the interviewer, in introductions, or inferred from context. If not found write "Unknown".]
+**Company:** [Extract from transcript or write "Unknown"]
 **Interviewee:** {interviewee_name}
 **Interviewer:** {interviewer_name}
 **Interview Type:** [Behavioral / Technical / System Design / Coding / Mixed]
@@ -339,82 +397,74 @@ Produce the document in this exact Markdown structure:
 ---
 
 ## Interview Summary
-[A detailed 6-10 sentence summary of the entire interview. Cover: what role was being interviewed for, what topics were explored, how the conversation flowed, notable moments, and the overall impression of how it went. Be specific — mention actual topics discussed, not vague descriptions.]
+[6-10 sentence detailed summary: role, topics explored, flow, notable moments, overall impression.]
 
 ---
 
 ## All Questions & Answers
 
-[For every question the interviewer asked, provide a full entry. Include small talk and intro questions too.]
-
 ### Q1: "[Exact question text]" `[timestamp]`
 **Type:** [Behavioral / Technical / Situational / Clarifying / Small talk]
-**Answer Summary:** [3-5 sentences summarizing what the interviewee said. Be specific — mention actual examples, companies, tools, or stories they referenced.]
-**Direct Quote:** "[Pull a key sentence or two verbatim from the transcript that captures the core of their answer]"
-**Follow-up questions:** [Any follow-ups asked on this question, or "None"]
+**Answer Summary:** [3-5 sentences — mention actual examples, companies, tools referenced.]
+**Direct Quote:** "[Key sentence verbatim from transcript]"
+**Follow-up questions:** [Any follow-ups, or "None"]
 
 *(repeat for every question — do not skip any)*
 
 ---
 
 ## Tools & Technologies Mentioned
-[List every specific tool, technology, platform, service, or product mentioned by either speaker. Organize by category.]
 
 ### Cloud & Infrastructure
-- [tool/service]: [who mentioned it and brief context]
+- [tool]: [who mentioned it and context]
 
 ### Containers & Orchestration
-- [tool/service]: [context]
+- [tool]: [context]
 
 ### CI/CD & DevOps
-- [tool/service]: [context]
+- [tool]: [context]
 
 ### Languages & Frameworks
-- [tool/service]: [context]
+- [tool]: [context]
 
 ### Databases & Storage
-- [tool/service]: [context]
+- [tool]: [context]
 
 ### Monitoring & Observability
-- [tool/service]: [context]
+- [tool]: [context]
 
 ### Security
-- [tool/service]: [context]
+- [tool]: [context]
 
 ### Other Tools
-- [tool/service]: [context]
+- [tool]: [context]
 
-[Only include categories that have at least one item. Skip empty categories.]
+[Skip empty categories]
 
 ---
 
 ## Technical Concepts & Topics Discussed
-[List every technical concept, pattern, methodology, or architectural topic that came up. For each one, note who raised it and what was said about it.]
-
-- **[Concept name]:** [1-2 sentences on how it came up and what was said]
-
-*(list all — be exhaustive)*
+- **[Concept]:** [1-2 sentences on how it came up and what was said]
 
 ---
 
 ## Key Stories & Examples Shared
-[List every specific story, project, or example the interviewee used to answer questions. These are the STAR-method stories or concrete examples they pulled from their experience.]
 
-### "[Story title based on content]"
+### "[Story title]"
 - **Context:** [Which question it answered]
-- **Company/Project:** [Where this story came from]
-- **What they said:** [2-3 sentence summary of the actual content]
+- **Company/Project:** [Where the story came from]
+- **What they said:** [2-3 sentence summary]
 - **Timestamp:** [when it occurred]
 
 ---
 
 ## Topics NOT Covered
-[Based on the job type and what was discussed, list 3-5 relevant technical or behavioral areas that were NOT explored in this interview but likely will come up in future rounds.]
+[3-5 relevant areas not explored — prep gaps for future rounds]
 
 ---
 
 ## Interviewer Signals
-[What signals did the interviewer give about what they care about? Did they push back on anything? Did they seem particularly interested in certain topics? Any hints about the team or role?]
+[What the interviewer seemed to care about, any pushback, hints about team/role]
 
 ---
 
@@ -422,10 +472,29 @@ Produce the document in this exact Markdown structure:
 """.strip()
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def get_mime(filename: str) -> str | None:
     ext = filename.rsplit(".", 1)[-1].lower()
     return SUPPORTED_MIME.get(ext)
 
+
+def _build_qwen_client():
+    """Return an OpenAI client pointed at DashScope, or None if no key."""
+    key = os.getenv("DASHSCOPE_API_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        from openai import OpenAI
+        return OpenAI(
+            api_key=key,
+            base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        )
+    except ImportError:
+        return None
+
+
+# ── Main analyzer ─────────────────────────────────────────────────────────────
 
 def analyze_video(
     client: genai.Client,
@@ -435,15 +504,23 @@ def analyze_video(
     status_callback=None,
     interviewee_name: str = "Candidate",
     interviewer_name: str = "Interviewer",
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """
-    Analyze an interview video using a cost-optimized 3-call strategy:
-      Call 1 (video)     — transcript + visual analysis
-      Call 2 (text only) — speech/content analysis from transcript
-      Call 3 (text only) — combine both into final report
+    Analyze an interview video using a hybrid Qwen + Gemini strategy.
 
-    Returns (report_markdown, transcript_markdown).
+    Strategy (if DASHSCOPE_API_KEY is set):
+      Call 1 — Qwen2.5-VL:    visual analysis from extracted frames (no audio cost)
+      Call 2 — Gemini audio:  transcript from extracted audio (audio tokens only)
+      Call 3 — Gemini text:   speech + content analysis
+      Call 4 — Gemini text:   combine into final report
+      Call 5 — Gemini text:   interview intelligence doc
+
+    Fallback (no DASHSCOPE_API_KEY):
+      Original Gemini-only flow (video upload for transcript + visual).
+
+    Returns (report_markdown, transcript_markdown, intel_markdown).
     """
+
     def log(msg):
         if status_callback:
             status_callback(msg)
@@ -451,32 +528,155 @@ def analyze_video(
     mime = get_mime(filename)
     if not mime:
         ext = filename.rsplit(".", 1)[-1].lower()
-        raise ValueError(f"Unsupported video format: .{ext}. Supported: {', '.join(SUPPORTED_MIME)}")
+        raise ValueError(f"Unsupported format: .{ext}")
 
-    # ── Upload ────────────────────────────────────────────────────────────────
-    log("Uploading video to Gemini...")
+    qwen = _build_qwen_client()
+
+    if qwen:
+        return _analyze_hybrid(
+            gemini=client,
+            qwen=qwen,
+            video_path=video_path,
+            filename=filename,
+            model=model,
+            log=log,
+            interviewee_name=interviewee_name,
+            interviewer_name=interviewer_name,
+        )
+    else:
+        log("No DASHSCOPE_API_KEY found — using Gemini-only mode.")
+        return _analyze_gemini_only(
+            client=client,
+            video_path=video_path,
+            filename=filename,
+            mime=mime,
+            model=model,
+            log=log,
+            interviewee_name=interviewee_name,
+            interviewer_name=interviewer_name,
+        )
+
+
+# ── Hybrid path ───────────────────────────────────────────────────────────────
+
+def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
+                    interviewee_name, interviewer_name):
+
+    # ── Extract frames ────────────────────────────────────────────────────────
+    log("Extracting video frames for Qwen visual analysis...")
+    frames = extract_frames(video_path)
+    log(f"  {len(frames)} frames extracted.")
+
+    # ── Extract audio ─────────────────────────────────────────────────────────
+    log("Extracting audio track for Gemini transcription...")
+    audio_path, audio_mime = extract_audio(video_path)
+    if audio_path:
+        log("  Audio extracted.")
+    else:
+        log("  No audio track found — transcript will be empty.")
+
+    # ── Call 1: Qwen visual analysis ──────────────────────────────────────────
+    log("Call 1/5 — Visual analysis (Qwen2.5-VL, frames only)...")
+    visual_prompt = VISUAL_ONLY_PROMPT.format(
+        interviewee_name=interviewee_name,
+        interviewer_name=interviewer_name,
+    )
+    qwen_response = qwen.chat.completions.create(
+        model="qwen2.5-vl-72b-instruct",
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "video", "video": frames, "fps": FRAMES_PER_SECOND},
+                {"type": "text", "text": visual_prompt},
+            ],
+        }],
+        max_tokens=4096,
+    )
+    visual_analysis = qwen_response.choices[0].message.content
+
+    # ── Call 2: Gemini audio transcription ────────────────────────────────────
+    if audio_path:
+        log("Call 2/5 — Transcribing audio (Gemini)...")
+        transcript_prompt = TRANSCRIPT_PROMPT.format(
+            interviewee_name=interviewee_name,
+            interviewer_name=interviewer_name,
+        )
+        with open(audio_path, "rb") as f:
+            audio_file = gemini.files.upload(
+                file=f,
+                config=types.UploadFileConfig(
+                    mime_type=audio_mime,
+                    display_name=filename,
+                ),
+            )
+        while audio_file.state.name == "PROCESSING":
+            time.sleep(2)
+            audio_file = gemini.files.get(name=audio_file.name)
+        if audio_file.state.name == "FAILED":
+            raise RuntimeError("Gemini audio processing failed.")
+
+        audio_part = types.Part.from_uri(
+            file_uri=audio_file.uri, mime_type=audio_mime
+        )
+        transcript_response = gemini.models.generate_content(
+            model=model,
+            contents=[audio_part, transcript_prompt],
+            config=types.GenerateContentConfig(
+                temperature=0.2, max_output_tokens=8192
+            ),
+        )
+        transcript = transcript_response.text
+
+        # Cleanup
+        try:
+            gemini.files.delete(name=audio_file.name)
+            os.unlink(audio_path)
+        except Exception:
+            pass
+    else:
+        transcript = "# Interview Transcript\n\n*No audio track detected in this video.*"
+
+    # ── Calls 3-5: text only (Gemini) ─────────────────────────────────────────
+    return _text_calls(
+        gemini=gemini,
+        model=model,
+        transcript=transcript,
+        visual_analysis=visual_analysis,
+        log=log,
+        interviewee_name=interviewee_name,
+        interviewer_name=interviewer_name,
+        call_offset=2,   # already did calls 1 & 2
+        total_calls=5,
+    )
+
+
+# ── Gemini-only fallback path ─────────────────────────────────────────────────
+
+def _analyze_gemini_only(client, video_path, filename, mime, model, log,
+                          interviewee_name, interviewer_name):
+
+    log("Call 1/4 — Uploading video to Gemini...")
     with open(video_path, "rb") as f:
         video_file = client.files.upload(
             file=f,
             config=types.UploadFileConfig(mime_type=mime, display_name=filename),
         )
-
     log("Waiting for Gemini to process the video...")
     while video_file.state.name == "PROCESSING":
         time.sleep(3)
         video_file = client.files.get(name=video_file.name)
-
     if video_file.state.name == "FAILED":
         raise RuntimeError(f"Gemini video processing failed: {video_file.state}")
 
     video_part = types.Part.from_uri(file_uri=video_file.uri, mime_type=mime)
 
-    # ── Call 1: Video → transcript + visual analysis ──────────────────────────
-    log("Call 1/3 — Generating transcript and visual analysis (watching video)...")
-    video_prompt = VIDEO_PROMPT_TEMPLATE.format(
+    # Build combined video prompt (transcript + visual)
+    video_prompt = _GEMINI_VIDEO_PROMPT.format(
         interviewee_name=interviewee_name,
         interviewer_name=interviewer_name,
     )
+
+    log("Call 1/4 — Generating transcript and visual analysis (watching video)...")
     video_response = client.models.generate_content(
         model=model,
         contents=[video_part, video_prompt],
@@ -484,64 +684,135 @@ def analyze_video(
     )
     video_output = video_response.text
 
-    # Clean up video from Gemini servers — no longer needed
     try:
         client.files.delete(name=video_file.name)
     except Exception:
         pass
 
-    # Split the video output into transcript and visual analysis
-    # Both sections are clearly headed so we can split on the Visual Analysis header
     if "# Visual Analysis" in video_output:
         transcript_raw, visual_analysis = video_output.split("# Visual Analysis", 1)
         visual_analysis = "# Visual Analysis" + visual_analysis
     else:
         transcript_raw = video_output
-        visual_analysis = video_output  # fallback — use full output for both
+        visual_analysis = video_output
 
-    # Extract just the transcript portion (Part 1)
     if "## PART 2" in transcript_raw:
         transcript = transcript_raw.split("## PART 2")[0].strip()
     else:
         transcript = transcript_raw.strip()
 
-    # ── Call 2: Text only → speech + content analysis ─────────────────────────
-    log("Call 2/4 — Analyzing speech patterns and answer quality (text only)...")
-    text_response = client.models.generate_content(
+    return _text_calls(
+        gemini=client,
+        model=model,
+        transcript=transcript,
+        visual_analysis=visual_analysis,
+        log=log,
+        interviewee_name=interviewee_name,
+        interviewer_name=interviewer_name,
+        call_offset=1,
+        total_calls=4,
+    )
+
+
+# ── Shared text-only calls (3-5 hybrid / 2-4 Gemini-only) ────────────────────
+
+def _text_calls(gemini, model, transcript, visual_analysis, log,
+                interviewee_name, interviewer_name, call_offset, total_calls):
+
+    n = call_offset + 1
+
+    log(f"Call {n}/{total_calls} — Analyzing speech patterns and answer quality...")
+    text_response = gemini.models.generate_content(
         model=model,
         contents=TEXT_PROMPT_TEMPLATE.format(transcript=transcript),
         config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=8192),
     )
     text_analysis = text_response.text
+    n += 1
 
-    # ── Call 3: Text only → combine into final report ─────────────────────────
-    log("Call 3/4 — Assembling final report...")
-    combine_prompt = COMBINE_PROMPT_TEMPLATE.format(
-        date=datetime.now().strftime("%B %d, %Y"),
-        visual_analysis=visual_analysis,
-        text_analysis=text_analysis,
-    )
-    final_response = client.models.generate_content(
+    log(f"Call {n}/{total_calls} — Assembling final report...")
+    combine_response = gemini.models.generate_content(
         model=model,
-        contents=combine_prompt,
+        contents=COMBINE_PROMPT_TEMPLATE.format(
+            date=datetime.now().strftime("%B %d, %Y"),
+            visual_analysis=visual_analysis,
+            text_analysis=text_analysis,
+        ),
         config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=8192),
     )
-    report = final_response.text
+    report = combine_response.text
+    n += 1
 
-    # ── Call 4: Text only → interview intelligence document ───────────────────
-    log("Call 4/4 — Extracting interview intelligence (Q&A, tools, concepts)...")
-    intel_prompt = INTEL_PROMPT_TEMPLATE.format(
-        transcript=transcript,
-        date=datetime.now().strftime("%B %d, %Y"),
-        interviewee_name=interviewee_name,
-        interviewer_name=interviewer_name,
-    )
-    intel_response = client.models.generate_content(
+    log(f"Call {n}/{total_calls} — Extracting interview intelligence...")
+    intel_response = gemini.models.generate_content(
         model=model,
-        contents=intel_prompt,
+        contents=INTEL_PROMPT_TEMPLATE.format(
+            transcript=transcript,
+            date=datetime.now().strftime("%B %d, %Y"),
+            interviewee_name=interviewee_name,
+            interviewer_name=interviewer_name,
+        ),
         config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=8192),
     )
     intel = intel_response.text
 
     log("Done.")
     return report, transcript, intel
+
+
+# ── Gemini-only video prompt (fallback) ───────────────────────────────────────
+
+_GEMINI_VIDEO_PROMPT = """\
+You are an expert interview coach watching a recorded interview video.
+
+SPEAKER NAMES:
+- Interviewee (candidate): {interviewee_name}
+- Interviewer: {interviewer_name}
+
+Use these exact names. Do NOT use generic labels.
+
+Your job has two parts. Produce both in a single response.
+
+## PART 1 — FULL TRANSCRIPT
+
+# Interview Transcript
+
+## Speakers
+- **{interviewee_name}** — Candidate
+- **{interviewer_name}** — Interviewer
+
+---
+
+[HH:MM:SS] **{interviewee_name}**: Exact words spoken here.
+
+Rules:
+- Timestamp every new speaker turn AND every ~30 seconds.
+- Transcribe exactly. Include filler words. Mark inaudible as [inaudible].
+
+---
+
+## PART 2 — VISUAL ANALYSIS
+
+Analyze ONLY what can be observed visually. Do NOT comment on speech content.
+
+# Visual Analysis
+
+**Company:** [detected or "Unknown"]
+**Interview type:** [Behavioral / Technical / Coding / General]
+
+### Body Language & Posture
+**Score: X/10**
+[Details with timestamps]
+
+### Eye Contact
+**Score: X/10**
+[Details]
+
+### Facial Expressions
+**Score: X/10**
+[Details]
+
+### Overall Visual Presence
+**Score: X/10**
+[Details]
+""".strip()

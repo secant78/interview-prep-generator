@@ -52,6 +52,10 @@ def get_gemini():
     return genai.Client(api_key=key)
 
 
+def has_qwen():
+    return bool(os.getenv("DASHSCOPE_API_KEY", "").strip())
+
+
 @st.cache_resource
 def get_pinecone_index():
     key = os.getenv("PINECONE_API_KEY")
@@ -448,8 +452,20 @@ def page_analyze():
     from analyzer import get_mime, SUPPORTED_MIME
 
     st.header("Analyze Interview Video")
+
+    if has_qwen():
+        st.success(
+            "**Hybrid mode active** — Qwen2.5-VL handles visual analysis (frames), "
+            "Gemini handles audio transcription only. ~10x cheaper per video."
+        )
+    else:
+        st.info(
+            "**Gemini-only mode** — Add `DASHSCOPE_API_KEY` to your .env to enable "
+            "hybrid Qwen+Gemini mode and cut costs ~10x."
+        )
+
     st.caption(
-        "Upload a recorded interview video. Gemini will watch the full video and generate "
+        "Upload a recorded interview video. The AI will generate "
         "a detailed feedback report covering body language, speech, content quality, and more. "
         "For coding interviews it will also extract the question and evaluate your solution."
     )
