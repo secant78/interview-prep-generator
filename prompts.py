@@ -15,6 +15,13 @@ JOB DESCRIPTION:
 
 ---
 
+CRITICAL FORMATTING RULES:
+- Every section header must be on its own line with # ## or ###
+- Every bullet point must start on its own line with -
+- Always put a blank line before and after bullet lists and headers
+- Never run separate items together on the same line
+- Bold uses **double asterisks**
+
 Generate a full markdown document following this EXACT structure. Be thorough, specific, and use details from the resume. Every story must reference real companies, real tools, and real outcomes from the resume.
 
 # THE COMPLETE STORY
@@ -113,97 +120,146 @@ JOB DESCRIPTION:
 
 ---
 
-Generate a full markdown document following this EXACT structure:
+CRITICAL FORMATTING RULES — follow these exactly or the document will be unreadable:
+- Every section header must be on its own line preceded by ## or ###
+- Every bullet point must start on a new line with a dash (- )
+- Every table must use proper markdown pipe syntax with a header separator row
+- Never run separate items together on the same line
+- Always put a blank line before and after tables, bullet lists, and headers
+- Bold text uses **double asterisks** — never use single asterisks for bold
+- Use --- on its own line to separate major sections
+
+---
+
+Generate the document using this EXACT structure and formatting:
 
 # INTERVIEW PREP PLAYBOOK
-[Company] — [Role Title]
-Candidate: [Full Name]
-Prepared: [Month Year]
+## [Company Name] — [Role Title]
+**Candidate:** [Full Name]
+**Prepared:** [Month Year]
 
 ---
 
 ## Part 1: Gap Analysis
 
-Create a markdown table with columns: Area | Level | Evidence | Bridge if Asked
+| Area | Level | Evidence | Bridge if Asked |
+|------|-------|----------|-----------------|
+| [Skill from JD] | GREEN | [Company — specific tool/project] | [One sentence bridge] |
+| [Skill from JD] | AMBER | [Company — specific tool/project] | [One sentence bridge] |
 
-- Area: each key technical skill from the JD
-- Level: GREEN (strong evidence), AMBER (present but not deep), RED (no evidence)
-- Evidence: specific proof from the resume (company, project, tool)
-- Bridge if Asked: one sentence the candidate can say if this comes up
+Include 8-12 rows. Each row on its own line. Level must be GREEN, AMBER, or RED.
 
-Include 8-12 rows covering all major JD requirements.
-
-After the table, write a 3-sentence summary: how many GREEN/AMBER/RED, what the strongest differentiator is, and what the one area to prepare bridges for is.
+**Summary:** [3 sentences: count of GREEN/AMBER/RED, strongest differentiator, one area to prepare bridges for.]
 
 ---
 
-## Part 2: Platform Stories for Migration & DevOps
+## Part 2: Platform Stories
 
-Write 4-5 STAR-format stories drawn from the resume that directly address the core requirements of this role. For each story:
+### Story 1: [Memorable Title]
 
-### Story [N]: [Memorable Title]
 **Role:** [Title at that company]
-**Situation:** [1-2 sentences — what was broken, missing, or needed to change]
+
+**Situation:** [1-2 sentences — what was broken or needed to change]
+
 **Task:** [1 sentence — your specific objective]
+
 **Action:**
-- [Bullet 1 — specific action with tool names]
-- [Bullet 2]
-- [Bullet 3]
-- [Bullet 4]
-**Result:** [2-3 sentences with concrete metrics: time saved, cost reduced, incidents eliminated, scale achieved]
-**[Target Company] hook:** "[One sentence connecting this story directly to what the target company is asking for — make it explicit]"
+
+- [Specific action with tool names]
+- [Specific action with tool names]
+- [Specific action with tool names]
+- [Specific action with tool names]
+
+**Result:** [2-3 sentences with concrete metrics — time saved, cost reduced, incidents eliminated]
+
+**Hook:** "[One sentence connecting this story to what the target company needs]"
+
+---
+
+[Repeat Story 2 through Story 4-5 using the same format with a blank line between each field]
 
 ---
 
 ## Part 3: Technical Deep Dives
 
-Write "must know cold" technical content for the 4-5 most important technical areas in the JD. For each area, write in numbered steps or bullet lists — no paragraphs. This section is reference material, not narrative. Include:
+### [Technical Area 1 from JD]
 
-- Core workflow steps
-- Key objects/components with one-line explanations
-- Common failure modes and how to troubleshoot them
-- The "why not the alternative" reasoning
+**Core workflow:**
+
+1. [Step one]
+2. [Step two]
+3. [Step three]
+
+**Key components:**
+
+- **[Component]:** [One-line explanation]
+- **[Component]:** [One-line explanation]
+
+**Common failure modes:**
+
+- [Failure mode] → [Fix]
+- [Failure mode] → [Fix]
+
+**Why not the alternative:** [1-2 sentences]
+
+---
+
+[Repeat for 4-5 technical areas]
 
 ---
 
 ## Part 4: Red Flag Deflections
 
-For each likely objection or weakness (based on gaps between the resume and JD), write:
+### "[Paraphrased objection the interviewer might raise]"
 
-**"[Paraphrased objection the interviewer might raise]"**
-"[First-person response the candidate can use. 3-5 sentences. Lead with what you DO have, bridge to the gap, close with confidence about ramp speed or transferability.]"
+"[First-person response. 3-5 sentences. Lead with what you DO have, bridge to the gap, close with confidence.]"
+
+---
+
+[Repeat for each gap area]
 
 ---
 
 ## Part 5: Opening Statement
 
-Write a 5-7 sentence opening statement in first person. It should:
-- Open with years of experience and the through-line of the career
-- Name the 2-3 most directly relevant accomplishments for this role
-- Reference specific companies and tools
-- Close by connecting explicitly to the target role
+[Write 5-7 sentences in first person. Each sentence on its own line or as a flowing paragraph — do NOT use bullet points here.]
 
 ---
 
-## Part 6: Strategic Questions for the Interviewer
+## Part 6: Questions to Ask the Interviewer
 
-Write 6-8 questions the candidate should ask. Each question should:
-- Demonstrate knowledge of the role's specific challenges
-- Signal operational depth (not "what's your culture like")
-- Give the candidate information they actually need
+1. [Question that signals operational depth — references a specific challenge from the JD]
+2. [Question]
+3. [Question]
+4. [Question]
+5. [Question]
+6. [Question]
 
 ---
 
 ## Part 7: Rapid-Reference Cheat Sheet
 
-### Key Metrics to Have Ready
-[Bullet list of 4-6 quantified outcomes from the resume — one per company/project]
+### Key Metrics
+
+- [Company]: [Quantified outcome — numbers required]
+- [Company]: [Quantified outcome]
+- [Company]: [Quantified outcome]
+- [Company]: [Quantified outcome]
 
 ### Story-to-Question Mapping
-A markdown table: If they ask about... | Use this story
+
+| If they ask about... | Use this story |
+|----------------------|---------------|
+| [Topic] | Story [N]: [Title] |
+| [Topic] | Story [N]: [Title] |
 
 ### AMBER Area Quick Answers
-[Bullet list of 2-3 sentence bridges for each AMBER area — the fastest possible answer if asked cold]
+
+**[AMBER skill]:** "[2-3 sentence bridge answer]"
+
+**[AMBER skill]:** "[2-3 sentence bridge answer]"
+
+---
 
 End of Interview Prep Playbook     Prepared: [Month Year]"""
 
@@ -221,6 +277,14 @@ JOB DESCRIPTION:
 {job_desc}
 
 ---
+
+CRITICAL FORMATTING RULES:
+- Every section header must be on its own line with ## or ###
+- Every bullet point must start on its own line with -
+- Always put a blank line before and after bullet lists, headers, and code blocks
+- Never run separate items together on the same line
+- Bold uses **double asterisks**
+- Use --- on its own line between major sections
 
 Generate a full markdown document following this EXACT structure:
 
