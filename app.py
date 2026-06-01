@@ -363,7 +363,7 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
 
     try:
         update_status("Uploading video to Gemini...")
-        report, transcript = analyze_video(
+        report, transcript, intel = analyze_video(
             client=gemini,
             video_path=tmp_path,
             filename=video_filename,
@@ -394,24 +394,29 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
         video_stem = video_filename.rsplit(".", 1)[0]
         filename = f"{date_str}_{company_slug}_{video_stem}_analysis.md"
         transcript_filename = f"{date_str}_{company_slug}_{video_stem}_transcript.md"
+        intel_filename = f"{date_str}_{company_slug}_{video_stem}_intel.md"
 
         run_dir = BASE_OUTPUT_DIR / f"{date_str}_{company_slug}"
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / filename).write_text(report, encoding="utf-8")
         (run_dir / transcript_filename).write_text(transcript, encoding="utf-8")
+        (run_dir / intel_filename).write_text(intel, encoding="utf-8")
 
         # Index into Pinecone
-        update_status("Indexing report and transcript into Pinecone...")
+        update_status("Indexing report, transcript, and intel into Pinecone...")
         index = get_pinecone_index()
         base_meta = {"company": company_slug, "date": date_str}
         report_count = ingest_doc(index, gemini, report, {**base_meta, "doc_type": "video_analysis"})
         transcript_count = ingest_doc(index, gemini, transcript, {**base_meta, "doc_type": "video_transcript"})
+        intel_count = ingest_doc(index, gemini, intel, {**base_meta, "doc_type": "video_intel"})
 
         job["result"] = {
             "content": report,
             "filename": filename,
             "transcript": transcript,
             "transcript_filename": transcript_filename,
+            "intel": intel,
+            "intel_filename": intel_filename,
             "company": company_slug,
             "doc_type": "video_analysis",
             "date": date_str,
@@ -419,7 +424,7 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
         }
         job["status"] = (
             f"Done! Saved to {run_dir} and indexed "
-            f"({report_count + transcript_count} chunks) — ask questions in the Chat tab."
+            f"({report_count + transcript_count + intel_count} chunks) — ask questions in the Chat tab."
         )
         job["state"] = "done"
 
@@ -570,7 +575,7 @@ def page_analyze():
         doc = st.session_state.video_report
         st.divider()
 
-        col_r, col_t = st.columns(2)
+        col_r, col_t, col_i = st.columns(3)
         with col_r:
             st.download_button(
                 label="Download Report (.md)",
@@ -587,8 +592,22 @@ def page_analyze():
                 mime="text/markdown",
                 key="av_download_transcript",
             )
+        with col_i:
+            st.download_button(
+                label="Download Intel (.md)",
+                data=doc.get("intel", ""),
+                file_name=doc.get("intel_filename", "intel.md"),
+                mime="text/markdown",
+                key="av_download_intel",
+            )
 
-        st.markdown(doc["content"])
+        tab_report, tab_intel, tab_transcript = st.tabs(["Performance Report", "Interview Intelligence", "Transcript"])
+        with tab_report:
+            st.markdown(doc["content"])
+        with tab_intel:
+            st.markdown(doc.get("intel", ""))
+        with tab_transcript:
+            st.markdown(doc.get("transcript", ""))
 
 
 # ── App Shell ─────────────────────────────────────────────────────────────────
