@@ -26,10 +26,16 @@ SUPPORTED_MIME = {
 # Covers everything that requires actually watching the video:
 # transcript + visual analysis only.
 
-VIDEO_PROMPT = """\
+VIDEO_PROMPT_TEMPLATE = """\
 You are an expert interview coach watching a recorded interview video.
 
 Your job has two parts. Produce both in a single response.
+
+SPEAKER NAMES:
+- Interviewee (candidate): {interviewee_name}
+- Interviewer: {interviewer_name}
+
+Use these exact names throughout the entire transcript. Do NOT use generic labels like "Candidate", "Speaker 1", or "Speaker 2".
 
 ---
 
@@ -42,16 +48,18 @@ Format:
 # Interview Transcript
 
 ## Speakers
-[List each speaker and their role. Use names if audible, otherwise "Interviewer" / "Candidate".]
+- **{interviewee_name}** — Candidate / Interviewee
+- **{interviewer_name}** — Interviewer
 
 ---
 
-[HH:MM:SS] **Speaker**: Exact words spoken here.
+[HH:MM:SS] **{interviewee_name}**: Exact words spoken here.
 
 Rules:
 - Timestamp every new speaker turn AND every ~30 seconds within a long continuous speech.
 - Transcribe exactly — do not paraphrase. Include filler words (um, uh, like, you know).
 - Mark inaudible sections as [inaudible]. Mark long silences as [pause ~Xs].
+- Always use {interviewee_name} and {interviewer_name} — never substitute with generic labels.
 
 ---
 
@@ -314,6 +322,8 @@ def analyze_video(
     filename: str,
     model: str = "gemini-2.0-flash-lite",
     status_callback=None,
+    interviewee_name: str = "Candidate",
+    interviewer_name: str = "Interviewer",
 ) -> tuple[str, str]:
     """
     Analyze an interview video using a cost-optimized 3-call strategy:
@@ -352,9 +362,13 @@ def analyze_video(
 
     # ── Call 1: Video → transcript + visual analysis ──────────────────────────
     log("Call 1/3 — Generating transcript and visual analysis (watching video)...")
+    video_prompt = VIDEO_PROMPT_TEMPLATE.format(
+        interviewee_name=interviewee_name,
+        interviewer_name=interviewer_name,
+    )
     video_response = client.models.generate_content(
         model=model,
-        contents=[video_part, VIDEO_PROMPT],
+        contents=[video_part, video_prompt],
         config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=8192),
     )
     video_output = video_response.text

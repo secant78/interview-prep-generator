@@ -351,7 +351,7 @@ def page_chat():
 
 
 # ── Video analysis background worker ─────────────────────────────────────────
-def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choice, company):
+def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choice, company, interviewee_name, interviewer_name):
     """
     Runs in a background thread. Writes progress + results into `job` dict
     (a plain Python dict, safe to write from any thread).
@@ -369,6 +369,8 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
             filename=video_filename,
             model=model_choice,
             status_callback=update_status,
+            interviewee_name=interviewee_name,
+            interviewer_name=interviewer_name,
         )
 
         # Clean up temp file
@@ -452,6 +454,7 @@ def page_analyze():
         company = st.text_input("Company (optional)", placeholder="e.g. Comcast", key="av_company")
     with col2:
         model_choice = st.selectbox(
+
             "Model",
             options=[
                 "gemini-2.0-flash-lite",
@@ -462,6 +465,25 @@ def page_analyze():
             key="av_model",
             help="2.0 Flash Lite: cheapest (~$0.03/30min). 2.5 Flash: best value (~$0.08, recommended). 2.5 Pro: highest quality (~$1.25).",
         )
+
+    col3, col4 = st.columns(2)
+    with col3:
+        interviewee_name = st.text_input(
+            "Interviewee Name",
+            placeholder="e.g. Sean Patrick",
+            key="av_interviewee",
+            help="The candidate's name. Used to label their lines in the transcript.",
+        )
+    with col4:
+        interviewer_name = st.text_input(
+            "Interviewer Name",
+            placeholder="e.g. John Smith (or leave as Interviewer)",
+            key="av_interviewer",
+            help="The interviewer's name. Leave blank to use 'Interviewer'.",
+        )
+
+    interviewee_name = interviewee_name.strip() or "Candidate"
+    interviewer_name = interviewer_name.strip() or "Interviewer"
 
     supported_exts = ", ".join(f".{e}" for e in SUPPORTED_MIME)
     video_file = st.file_uploader(
@@ -516,7 +538,7 @@ def page_analyze():
             gemini = get_gemini()
             thread = threading.Thread(
                 target=_run_analysis_thread,
-                args=(new_job, gemini, tmp.name, video_file.name, model_choice, company),
+                args=(new_job, gemini, tmp.name, video_file.name, model_choice, company, interviewee_name, interviewer_name),
                 daemon=True,
             )
             thread.start()
