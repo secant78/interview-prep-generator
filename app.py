@@ -255,14 +255,12 @@ def page_generate():
         if "generated_docs" not in st.session_state:
             st.session_state.generated_docs = {}
 
-        index = get_pinecone_index()
-        total_steps = len(doc_keys) * 2  # generate + index per doc
+        # ── Phase 1: Generate all docs ────────────────────────────────────────
         progress = st.progress(0)
         status = st.empty()
-        step = 0
 
         for i, key in enumerate(doc_keys):
-            status.text(f"Generating {DOC_OPTIONS[key]}...")
+            status.text(f"Generating {DOC_OPTIONS[key]}... ({i+1}/{len(doc_keys)})")
             content = generate_doc(gemini, key, resume_text, job_desc, company, role)
             header = f"<!-- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Company: {company} | Role: {role} -->\n\n"
             full_content = header + content
@@ -278,18 +276,18 @@ def page_generate():
                 "doc_type": key,
                 "date": date_str,
             }
-            step += 1
-            progress.progress(step / total_steps)
+            progress.progress((i + 1) / (len(doc_keys) + 1))  # +1 reserves space for indexing phase
 
-            status.text(f"Indexing {DOC_OPTIONS[key]}...")
-            ingest_doc(index, gemini, full_content, {
-                "company": company_slug,
-                "doc_type": key,
-                "date": date_str,
+        # ── Phase 2: Index all docs ───────────────────────────────────────────
+        status.text("All documents generated — indexing into Pinecone...")
+        index = get_pinecone_index()
+        for doc in st.session_state.generated_docs.values():
+            ingest_doc(index, gemini, doc["content"], {
+                "company": doc["company"],
+                "doc_type": doc["doc_type"],
+                "date": doc["date"],
             })
-            step += 1
-            progress.progress(step / total_steps)
-
+        progress.progress(1.0)
         status.text("Done!")
         st.success(f"Generated and indexed {len(doc_keys)} document(s). Saved to: {run_dir}")
 
