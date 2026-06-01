@@ -621,23 +621,21 @@ def page_analyze():
             import traceback
             st.error(f"Failed to start analysis: {e}\n\n```\n{traceback.format_exc()}\n```")
 
-    # Re-read job from session_state each render (thread may have updated it)
-    job = st.session_state.get("av_job", {})
-    job_state = job.get("state", "idle")
+    # ── Job status poller — runs every 3s without blocking other tabs ──────────
+    @st.fragment(run_every=3)
+    def _job_status():
+        job = st.session_state.get("av_job", {})
+        state = job.get("state", "idle")
+        if state == "running":
+            st.info(f"⏳ {job.get('status', 'Working...')}")
+        elif state == "done":
+            if job.get("result"):
+                st.session_state.video_report = job["result"]
+            st.success(job.get("status", "Done!"))
+        elif state == "error":
+            st.error(job.get("status", "An error occurred."))
 
-    if job_state == "running":
-        status_msg = job.get("status", "Working...")
-        st.info(f"⏳ {status_msg}")
-        time.sleep(3)
-        st.rerun()
-
-    elif job_state == "done":
-        if job.get("result"):
-            st.session_state.video_report = job["result"]
-        st.success(job.get("status", "Done!"))
-
-    elif job_state == "error":
-        st.error(job.get("status", "An error occurred."))
+    _job_status()
 
     # Show results
     if st.session_state.get("video_report"):
