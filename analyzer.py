@@ -121,41 +121,102 @@ def extract_audio(video_path: str) -> tuple[str | None, str | None]:
 
 # ── Groq Whisper transcription ───────────────────────────────────────────────
 
-GROQ_WHISPER_MODEL = "whisper-large-v3"
-GROQ_MAX_FILE_MB   = 24   # Groq limit is 25 MB; stay under with margin
+GROQ_WHISPER_MODEL  = "whisper-large-v3"
+GROQ_MAX_FILE_MB    = 24    # Groq file size limit is 25 MB; stay under with margin
+GROQ_CHUNK_SECONDS  = 1500  # 25-minute chunks — safely under Groq's ~30-min duration limit
+
+
+def _split_audio(audio_path: str, chunk_seconds: int) -> list[str]:
+    """Split an audio file into fixed-length chunks. Returns list of temp file paths."""
+    chunk_paths = []
+    with av.open(audio_path) as in_c:
+        if not in_c.streams.audio:
+            return [audio_path]
+        total = float(in_c.duration or 0) / 1_000_000
+        if total <= chunk_seconds:
+            return [audio_path]   # no splitting needed
+
+    n_chunks = int(total / chunk_seconds) + 1
+    for i in range(n_chunks):
+        start_sec = i * chunk_seconds
+        chunk_path = tempfile.mktemp(suffix=f"_chunk{i}.mp3")
+        try:
+            with av.open(audio_path) as in_c:
+                in_audio = in_c.streams.audio[0]
+                with av.open(chunk_path, "w") as out_c:
+                    out_audio = out_c.add_stream("libmp3lame", rate=16000)
+                    out_audio.bit_rate = 32_000
+                    for frame in in_c.decode(in_audio):
+                        t = float(frame.pts * in_audio.time_base)
+                        if t < start_sec:
+                            continue
+                        if t >= start_sec + chunk_seconds:
+                            break
+                        frame.pts = None
+                        for pkt in out_audio.encode(frame):
+                            out_c.mux(pkt)
+                    for pkt in out_audio.encode(None):
+                        out_c.mux(pkt)
+            if os.path.getsize(chunk_path) > 1000:   # skip empty chunks
+                chunk_paths.append(chunk_path)
+        except Exception:
+            pass
+
+    return chunk_paths if chunk_paths else [audio_path]
+
+
+def _segments_to_lines(segments, time_offset: float = 0.0) -> list[str]:
+    """Convert Groq segments to timestamped lines, shifting by time_offset seconds."""
+    lines = []
+    for seg in segments:
+        t = (seg["start"] if isinstance(seg, dict) else seg.start) + time_offset
+        text = (seg["text"] if isinstance(seg, dict) else seg.text).strip()
+        h, m, s = int(t // 3600), int((t % 3600) // 60), int(t % 60)
+        lines.append(f"[{h:02d}:{m:02d}:{s:02d}] {text}")
+    return lines
 
 
 def transcribe_with_groq(audio_path: str, groq_api_key: str) -> str:
     """
-    Transcribe audio using Groq Whisper (free, ~6s for 30-min audio).
+    Transcribe audio using Groq Whisper.
+    Automatically splits audio longer than 25 minutes into chunks
+    and stitches the transcripts together with correct timestamps.
     Returns a raw timestamped transcript string (no speaker labels yet).
     """
     from groq import Groq
-
-    file_mb = os.path.getsize(audio_path) / 1_000_000
-    if file_mb > GROQ_MAX_FILE_MB:
-        raise ValueError(
-            f"Audio file is {file_mb:.1f} MB — exceeds Groq's {GROQ_MAX_FILE_MB} MB limit. "
-            "Try a shorter video or reduce the bitrate."
-        )
-
     client = Groq(api_key=groq_api_key)
-    with open(audio_path, "rb") as f:
-        result = client.audio.transcriptions.create(
-            file=f,
-            model=GROQ_WHISPER_MODEL,
-            response_format="verbose_json",
-            timestamp_granularities=["segment"],
-        )
 
-    lines = []
-    for seg in result.segments:
-        t = seg["start"] if isinstance(seg, dict) else seg.start
-        text = seg["text"] if isinstance(seg, dict) else seg.text
-        h, m, s = int(t // 3600), int((t % 3600) // 60), int(t % 60)
-        lines.append(f"[{h:02d}:{m:02d}:{s:02d}] {text.strip()}")
+    chunk_paths = _split_audio(audio_path, GROQ_CHUNK_SECONDS)
+    all_lines   = []
+    time_offset = 0.0
 
-    return "\n".join(lines)
+    for chunk_path in chunk_paths:
+        file_mb = os.path.getsize(chunk_path) / 1_000_000
+        if file_mb > GROQ_MAX_FILE_MB:
+            # chunk still too large — skip with a note
+            all_lines.append(f"[chunk too large ({file_mb:.1f} MB) — skipped]")
+            time_offset += GROQ_CHUNK_SECONDS
+            continue
+
+        with open(chunk_path, "rb") as f:
+            result = client.audio.transcriptions.create(
+                file=f,
+                model=GROQ_WHISPER_MODEL,
+                response_format="verbose_json",
+                timestamp_granularities=["segment"],
+            )
+
+        all_lines.extend(_segments_to_lines(result.segments, time_offset))
+        time_offset += GROQ_CHUNK_SECONDS
+
+        # Clean up temp chunk files (but not the original)
+        if chunk_path != audio_path:
+            try:
+                os.unlink(chunk_path)
+            except Exception:
+                pass
+
+    return "\n".join(all_lines)
 
 
 # ── Speaker label prompt (Gemini text call after Groq) ────────────────────────
