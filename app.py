@@ -145,18 +145,16 @@ def ingest_doc(index, gemini_client, text: str, meta: dict) -> int:
 
 def rag_answer(index, gemini_client, query: str, filters: dict) -> str:
     """Search using Pinecone integrated inference — no embedding call needed."""
-    query_params = {
-        "inputs": {"text": query},
-        "top_k": 5,
+    search_kwargs = {
+        "namespace": NAMESPACE,
+        "inputs":    {"text": query},
+        "top_k":     5,
+        "fields":    ["chunk_text", "title", "company", "doc_type"],
     }
     if filters:
-        query_params["filter"] = {k: {"$eq": v} for k, v in filters.items()}
+        search_kwargs["filter"] = {k: {"$eq": v} for k, v in filters.items()}
 
-    results = index.search(
-        namespace=NAMESPACE,
-        query=query_params,
-        fields=["chunk_text", "title", "company", "doc_type"],
-    )
+    results = index.search(**search_kwargs)
 
     hits = results.get("result", {}).get("hits", [])
     if not hits:
