@@ -292,23 +292,46 @@ def page_chat():
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    # Fixed-height scrollable message window
+    chat_container = st.container(height=550, border=False)
+    with chat_container:
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
+    # Input stays below the container
     if prompt := st.chat_input("Ask anything about your interview prep..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Searching docs..."):
-                index = get_pinecone_index()
-                gemini = get_gemini()
-                response = rag_answer(index, gemini, prompt, filters)
-            st.markdown(response)
+        # Re-render all messages + new ones inside the container
+        with chat_container:
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            with st.chat_message("assistant"):
+                with st.spinner("Searching docs..."):
+                    index = get_pinecone_index()
+                    gemini = get_gemini()
+                    response = rag_answer(index, gemini, prompt, filters)
+                st.markdown(response)
 
         st.session_state.messages.append({"role": "assistant", "content": response})
+
+        # Scroll the container to the bottom
+        import streamlit.components.v1 as components
+        components.html(
+            """
+            <script>
+                const containers = window.parent.document.querySelectorAll(
+                    '[data-testid="stVerticalBlockBorderWrapper"]'
+                );
+                if (containers.length > 0) {
+                    const chatBox = containers[containers.length - 1];
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                }
+            </script>
+            """,
+            height=0,
+        )
 
 
 # ── Video analysis background worker ─────────────────────────────────────────
