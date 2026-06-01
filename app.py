@@ -315,22 +315,11 @@ def page_generate():
 def page_chat():
     st.header("Chat with Your Prep Docs")
 
-    with st.sidebar:
-        st.subheader("Filters")
-        company_filter = st.text_input("Company (optional)", placeholder="e.g. Comcast")
-        doc_type_filter = st.selectbox(
-            "Doc Type (optional)",
-            options=["All"] + list(DOC_OPTIONS.keys()),
-        )
-        if st.button("Clear Chat"):
-            st.session_state.messages = []
-            st.rerun()
+    if st.button("Clear Chat"):
+        st.session_state.messages = []
+        st.rerun()
 
     filters = {}
-    if company_filter:
-        filters["company"] = slugify(company_filter)
-    if doc_type_filter != "All":
-        filters["doc_type"] = doc_type_filter
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
