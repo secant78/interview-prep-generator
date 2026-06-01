@@ -279,14 +279,17 @@ def page_generate():
             progress.progress((i + 1) / (len(doc_keys) + 1))  # +1 reserves space for indexing phase
 
         # ── Phase 2: Index all docs ───────────────────────────────────────────
-        status.text("All documents generated — indexing into Pinecone...")
         index = get_pinecone_index()
-        for doc in st.session_state.generated_docs.values():
+        docs_to_index = list(st.session_state.generated_docs.values())
+        for i, doc in enumerate(docs_to_index):
+            status.text(f"Uploading to Pinecone... ({i+1}/{len(docs_to_index)}) {DOC_OPTIONS.get(doc['doc_type'], doc['doc_type'])}")
             ingest_doc(index, gemini, doc["content"], {
                 "company": doc["company"],
                 "doc_type": doc["doc_type"],
                 "date": doc["date"],
             })
+            progress.progress((len(doc_keys) + i + 1) / (len(doc_keys) * 2))
+
         progress.progress(1.0)
         status.text("Done!")
         st.success(f"Generated and indexed {len(doc_keys)} document(s). Saved to: {run_dir}")
