@@ -21,26 +21,35 @@ Upload your resume and paste a job description to generate up to 6 tailored docu
 All documents are saved as Markdown files and automatically indexed into Pinecone for chat.
 
 ### Analyze Video
-Upload a recorded interview video and get a full AI-generated feedback report. Uses a cost-optimized 3-call strategy:
+Upload a recorded interview video and get three AI-generated documents. Enter the interviewee and interviewer names so the transcript uses the correct labels. Uses a 4-call strategy:
 
 - **Call 1 (video)** — Generates a timestamped transcript + analyzes everything visual: eye contact, body language, posture, hand gestures, facial expressions
 - **Call 2 (text only)** — Analyzes the transcript for filler words, speech pace, answer quality, STAR method usage, and coding question extraction
-- **Call 3 (text only)** — Combines both analyses into one unified final report with cross-references
+- **Call 3 (text only)** — Combines both analyses into one unified final performance report with cross-references
+- **Call 4 (text only)** — Extracts structured interview intelligence from the transcript
 
-**The report includes:**
+**Performance Report includes:**
 - Overall score and executive summary
 - What you did well vs. what needs improvement (with timestamps)
 - Scored breakdown: body language, eye contact, facial expressions, speech patterns, answer quality, overall presence
 - Coding interview section (auto-detected): extracts the question, evaluates your solution, correctness, complexity, edge cases
 - Top 5 priority improvements + concrete action plan
 
-**The transcript includes:**
-- Full word-for-word transcription
+**Interview Intelligence document includes:**
+- Detailed interview summary (6-10 sentences covering the full conversation)
+- Every question asked — exact wording, timestamp, type, answer summary, and direct quote
+- All tools & technologies mentioned, organized by category (Cloud, CI/CD, Containers, Languages, DBs, Monitoring, Security)
+- Technical concepts and architectural topics discussed
+- Key stories and examples the interviewee used, with source company context
+- Topics NOT covered — prep gaps to address before future rounds
+- Interviewer signals — what they seemed to care about most
+
+**Transcript includes:**
+- Full word-for-word transcription with correct speaker names
 - `[HH:MM:SS]` timestamps per speaker turn and every ~30 seconds
 - Filler words preserved for accuracy
-- Speaker labels (names if audible, otherwise Interviewer/Candidate)
 
-Both files are saved to disk and automatically indexed into Pinecone so you can ask timestamp-specific questions in the Chat tab (e.g. *"At what point did I lose confidence?"*).
+All three files are saved to disk and automatically indexed into Pinecone so you can ask questions in the Chat tab (e.g. *"What questions did I struggle with?"*, *"What tools came up in the interview?"*).
 
 **Company auto-detection:** If you leave the company field blank, Gemini detects the company from visual cues in the video (logos, screen content, email domains, interviewer intro) and uses it for the folder name.
 
@@ -115,7 +124,7 @@ Each document generation call uses Gemini 2.5 Flash on text only — costs fract
 | gemini-2.5-flash | ~$0.08 |
 | gemini-2.5-pro | ~$1.25 |
 
-The 3-call split strategy cuts cost ~50% vs. sending the video twice by replacing the second video call with a cheap text-only call on the transcript.
+The 4-call strategy sends the video only once (Call 1). Calls 2, 3, and 4 are cheap text-only calls on the transcript, cutting cost significantly vs. sending the video multiple times.
 
 > **Note:** Gemini has a free tier but video analysis consumes a large number of tokens and will quickly exceed free limits. Enable billing on your Google Cloud project for uninterrupted use.
 
