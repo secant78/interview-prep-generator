@@ -97,7 +97,7 @@ def ingest_file(path: Path, index) -> int:
 
     # Upsert in batches of 100
     for i in range(0, len(records), 100):
-        index.upsert_records(NAMESPACE, records[i:i+100])
+        index.upsert_records(records=records[i:i+100], namespace=NAMESPACE)
 
     return len(records)
 
