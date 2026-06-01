@@ -453,15 +453,23 @@ def page_analyze():
 
     st.header("Analyze Interview Video")
 
-    if has_qwen():
+    _qwen = has_qwen()
+    _groq = bool(os.getenv("GROQ_API_KEY", "").strip())
+
+    if _qwen and _groq:
         st.success(
-            "**Hybrid mode active** — Qwen2.5-VL handles visual analysis (frames), "
-            "Gemini handles audio transcription only. ~10x cheaper per video."
+            "**Full hybrid mode** — Qwen2.5-VL for visual analysis, "
+            "Groq Whisper (free) for transcription, Gemini for speaker labels + analysis."
+        )
+    elif _qwen:
+        st.success(
+            "**Hybrid mode** — Qwen2.5-VL for visual analysis, Gemini for audio transcription. "
+            "Add `GROQ_API_KEY` to .env to make transcription free."
         )
     else:
         st.info(
-            "**Gemini-only mode** — Add `DASHSCOPE_API_KEY` to your .env to enable "
-            "hybrid Qwen+Gemini mode and cut costs ~10x."
+            "**Gemini-only mode** — Add `DASHSCOPE_API_KEY` (Qwen) and `GROQ_API_KEY` (Groq) "
+            "to your .env to enable full hybrid mode and cut costs ~10x."
         )
 
     st.caption(

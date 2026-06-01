@@ -68,8 +68,8 @@ def extract_frames(video_path: str) -> list[str]:
 
 def extract_audio(video_path: str) -> tuple[str | None, str | None]:
     """
-    Extract audio track to a temp mp3 file.
-    Returns (file_path, mime_type) or (None, None) if no audio.
+    Extract audio track to a temp mp3 file at 32kbps (stays under Groq's 25MB limit
+    even for 60-min videos). Returns (file_path, mime_type) or (None, None).
     """
     try:
         with av.open(video_path) as container:
@@ -81,7 +81,7 @@ def extract_audio(video_path: str) -> tuple[str | None, str | None]:
             in_audio = in_c.streams.audio[0]
             with av.open(tmp, "w") as out_c:
                 out_audio = out_c.add_stream("libmp3lame", rate=16000)
-                out_audio.bit_rate = 64_000
+                out_audio.bit_rate = 32_000          # 32kbps — voice quality, small file
                 for frame in in_c.decode(in_audio):
                     frame.pts = None
                     for pkt in out_audio.encode(frame):
@@ -117,6 +117,82 @@ def extract_audio(video_path: str) -> tuple[str | None, str | None]:
             return tmp, "audio/wav"
         except Exception:
             return None, None
+
+
+# ── Groq Whisper transcription ───────────────────────────────────────────────
+
+GROQ_WHISPER_MODEL = "whisper-large-v3"
+GROQ_MAX_FILE_MB   = 24   # Groq limit is 25 MB; stay under with margin
+
+
+def transcribe_with_groq(audio_path: str, groq_api_key: str) -> str:
+    """
+    Transcribe audio using Groq Whisper (free, ~6s for 30-min audio).
+    Returns a raw timestamped transcript string (no speaker labels yet).
+    """
+    from groq import Groq
+
+    file_mb = os.path.getsize(audio_path) / 1_000_000
+    if file_mb > GROQ_MAX_FILE_MB:
+        raise ValueError(
+            f"Audio file is {file_mb:.1f} MB — exceeds Groq's {GROQ_MAX_FILE_MB} MB limit. "
+            "Try a shorter video or reduce the bitrate."
+        )
+
+    client = Groq(api_key=groq_api_key)
+    with open(audio_path, "rb") as f:
+        result = client.audio.transcriptions.create(
+            file=f,
+            model=GROQ_WHISPER_MODEL,
+            response_format="verbose_json",
+            timestamp_granularities=["segment"],
+        )
+
+    lines = []
+    for seg in result.segments:
+        t = seg.start
+        h, m, s = int(t // 3600), int((t % 3600) // 60), int(t % 60)
+        lines.append(f"[{h:02d}:{m:02d}:{s:02d}] {seg.text.strip()}")
+
+    return "\n".join(lines)
+
+
+# ── Speaker label prompt (Gemini text call after Groq) ────────────────────────
+
+SPEAKER_LABEL_PROMPT = """\
+You are given a raw timestamped transcript from an interview. The transcript has no speaker labels.
+
+Add the correct speaker label to every line based on context:
+- Questions, prompts, and short phrases are usually the interviewer.
+- Longer detailed answers, stories, and explanations are usually the interviewee.
+- Use transitions, topic shifts, and conversational patterns to determine speaker.
+
+INTERVIEWEE NAME: {interviewee_name}
+INTERVIEWER NAME: {interviewer_name}
+
+RAW TRANSCRIPT:
+{raw_transcript}
+
+---
+
+Produce the labeled transcript in this EXACT format — preserve all timestamps and all original words:
+
+# Interview Transcript
+
+## Speakers
+- **{interviewee_name}** — Candidate / Interviewee
+- **{interviewer_name}** — Interviewer
+
+---
+
+[HH:MM:SS] **{interviewee_name}**: Their exact words here.
+[HH:MM:SS] **{interviewer_name}**: Their exact words here.
+
+Rules:
+- Do NOT paraphrase. Keep every word exactly as transcribed.
+- Every line must have a speaker label.
+- Never use generic labels — always use {interviewee_name} or {interviewer_name}.
+""".strip()
 
 
 # ── Qwen visual-only prompt ───────────────────────────────────────────────────
@@ -562,21 +638,23 @@ def analyze_video(
 def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
                     interviewee_name, interviewer_name):
 
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    use_groq  = bool(groq_key)
+    total     = 6 if use_groq else 5
+
     # ── Extract frames ────────────────────────────────────────────────────────
     log("Extracting video frames for Qwen visual analysis...")
     frames = extract_frames(video_path)
     log(f"  {len(frames)} frames extracted.")
 
     # ── Extract audio ─────────────────────────────────────────────────────────
-    log("Extracting audio track for Gemini transcription...")
+    svc = "Groq Whisper" if use_groq else "Gemini"
+    log(f"Extracting audio track for {svc} transcription...")
     audio_path, audio_mime = extract_audio(video_path)
-    if audio_path:
-        log("  Audio extracted.")
-    else:
-        log("  No audio track found — transcript will be empty.")
+    log("  Audio extracted." if audio_path else "  No audio track found.")
 
     # ── Call 1: Qwen visual analysis ──────────────────────────────────────────
-    log("Call 1/5 — Visual analysis (Qwen2.5-VL, frames only)...")
+    log(f"Call 1/{total} — Visual analysis (Qwen2.5-VL, frames only)...")
     visual_prompt = VISUAL_ONLY_PROMPT.format(
         interviewee_name=interviewee_name,
         interviewer_name=interviewer_name,
@@ -594,19 +672,43 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
     )
     visual_analysis = qwen_response.choices[0].message.content
 
-    # ── Call 2: Gemini audio transcription ────────────────────────────────────
-    if audio_path:
-        log("Call 2/5 — Transcribing audio (Gemini)...")
-        transcript_prompt = TRANSCRIPT_PROMPT.format(
-            interviewee_name=interviewee_name,
-            interviewer_name=interviewer_name,
+    # ── Call 2: Transcription ─────────────────────────────────────────────────
+    if not audio_path:
+        transcript = "# Interview Transcript\n\n*No audio track detected in this video.*"
+        call_offset = 2
+    elif use_groq:
+        # ── Groq Whisper: fast + free ─────────────────────────────────────────
+        log(f"Call 2/{total} — Transcribing audio (Groq Whisper, free)...")
+        raw_transcript = transcribe_with_groq(audio_path, groq_key)
+
+        # ── Call 3: Gemini text — add speaker labels ──────────────────────────
+        log(f"Call 3/{total} — Adding speaker labels (Gemini text)...")
+        label_response = gemini.models.generate_content(
+            model=model,
+            contents=SPEAKER_LABEL_PROMPT.format(
+                interviewee_name=interviewee_name,
+                interviewer_name=interviewer_name,
+                raw_transcript=raw_transcript,
+            ),
+            config=types.GenerateContentConfig(
+                temperature=0.1, max_output_tokens=8192
+            ),
         )
+        transcript = label_response.text
+        call_offset = 3
+
+        try:
+            os.unlink(audio_path)
+        except Exception:
+            pass
+    else:
+        # ── Gemini audio fallback ─────────────────────────────────────────────
+        log(f"Call 2/{total} — Transcribing audio (Gemini)...")
         with open(audio_path, "rb") as f:
             audio_file = gemini.files.upload(
                 file=f,
                 config=types.UploadFileConfig(
-                    mime_type=audio_mime,
-                    display_name=filename,
+                    mime_type=audio_mime, display_name=filename
                 ),
             )
         while audio_file.state.name == "PROCESSING":
@@ -620,23 +722,27 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
         )
         transcript_response = gemini.models.generate_content(
             model=model,
-            contents=[audio_part, transcript_prompt],
+            contents=[
+                audio_part,
+                TRANSCRIPT_PROMPT.format(
+                    interviewee_name=interviewee_name,
+                    interviewer_name=interviewer_name,
+                ),
+            ],
             config=types.GenerateContentConfig(
                 temperature=0.2, max_output_tokens=8192
             ),
         )
         transcript = transcript_response.text
+        call_offset = 2
 
-        # Cleanup
         try:
             gemini.files.delete(name=audio_file.name)
             os.unlink(audio_path)
         except Exception:
             pass
-    else:
-        transcript = "# Interview Transcript\n\n*No audio track detected in this video.*"
 
-    # ── Calls 3-5: text only (Gemini) ─────────────────────────────────────────
+    # ── Remaining text calls (Gemini) ─────────────────────────────────────────
     return _text_calls(
         gemini=gemini,
         model=model,
@@ -645,8 +751,8 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
         log=log,
         interviewee_name=interviewee_name,
         interviewer_name=interviewer_name,
-        call_offset=2,   # already did calls 1 & 2
-        total_calls=5,
+        call_offset=call_offset,
+        total_calls=total,
     )
 
 
