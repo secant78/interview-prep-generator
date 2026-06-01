@@ -10,7 +10,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone
 
 load_dotenv()
 
@@ -23,10 +23,10 @@ load_dotenv()
 # visible on the next rerun without any module-level state.
 
 # ── Constants ────────────────────────────────────────────────────────────────
-PINECONE_INDEX = "interview-prep"
-EMBEDDING_MODEL = "gemini-embedding-001"
-EMBEDDING_DIM = 3072
-CHAT_MODEL = "gemini-2.5-flash"
+PINECONE_INDEX  = "interview-prep"
+CHAT_MODEL      = "gemini-2.5-flash"
+EMBED_MODEL     = "multilingual-e5-large"   # Pinecone integrated inference — free tier
+NAMESPACE       = "__default__"
 BASE_OUTPUT_DIR = Path(r"C:\Users\Sean Cancino\Documents\interview-prep")
 BASE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -63,18 +63,16 @@ def get_pinecone_index():
         st.error("PINECONE_API_KEY not set in .env")
         st.stop()
     pc = Pinecone(api_key=key)
-    existing = {i.name: i for i in pc.list_indexes()}
-    if PINECONE_INDEX in existing:
-        # Recreate if dimension doesn't match (e.g. embedding model changed)
-        if existing[PINECONE_INDEX].dimension != EMBEDDING_DIM:
-            pc.delete_index(PINECONE_INDEX)
-            existing.pop(PINECONE_INDEX)
+    existing = [i.name for i in pc.list_indexes()]
     if PINECONE_INDEX not in existing:
-        pc.create_index(
+        pc.create_index_for_model(
             name=PINECONE_INDEX,
-            dimension=EMBEDDING_DIM,
-            metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+            cloud="aws",
+            region="us-east-1",
+            embed={
+                "model": EMBED_MODEL,
+                "field_map": {"text": "chunk_text"},
+            },
         )
     return pc.Index(PINECONE_INDEX)
 
@@ -123,82 +121,53 @@ def chunk_markdown(text: str, meta: dict) -> list[dict]:
     return chunks
 
 
-EMBED_DELAY = 6
-MAX_RETRIES = 5
-
-
-def embed_texts(gemini_client, texts: list[str]) -> list[list[float]]:
-    import time
-    all_embeddings = []
-    for i, text in enumerate(texts):
-        for attempt in range(MAX_RETRIES):
-            try:
-                result = gemini_client.models.embed_content(
-                    model=EMBEDDING_MODEL,
-                    contents=[text],
-                    config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-                )
-                all_embeddings.append(result.embeddings[0].values)
-                break
-            except Exception as e:
-                if "429" in str(e) and attempt < MAX_RETRIES - 1:
-                    time.sleep(EMBED_DELAY * (2 ** attempt))
-                else:
-                    raise
-        if i < len(texts) - 1:
-            time.sleep(EMBED_DELAY)
-    return all_embeddings
-
-
 def ingest_doc(index, gemini_client, text: str, meta: dict) -> int:
+    """Upsert text chunks directly — Pinecone handles embedding internally."""
     chunks = chunk_markdown(text, meta)
     if not chunks:
         return 0
-    texts = [c["text"] for c in chunks]
-    embeddings = embed_texts(gemini_client, texts)
-    vectors = [
+    records = [
         {
-            "id": f"{meta['company']}_{meta['doc_type']}_{meta['date']}_chunk{i}",
-            "values": emb,
-            "metadata": {
-                "text": chunk["text"][:2000],
-                "title": chunk["title"],
-                "company": meta["company"],
-                "doc_type": meta["doc_type"],
-                "date": meta["date"],
-            },
+            "_id":        f"{meta['company']}_{meta['doc_type']}_{meta['date']}_chunk{i}",
+            "chunk_text": chunk["text"][:2000],
+            "title":      chunk["title"],
+            "company":    meta["company"],
+            "doc_type":   meta["doc_type"],
+            "date":       meta["date"],
         }
-        for i, (chunk, emb) in enumerate(zip(chunks, embeddings))
+        for i, chunk in enumerate(chunks)
     ]
-    for i in range(0, len(vectors), 100):
-        index.upsert(vectors=vectors[i:i+100])
-    return len(vectors)
+    # Upsert in batches of 100
+    for i in range(0, len(records), 100):
+        index.upsert_records(NAMESPACE, records[i:i+100])
+    return len(records)
 
 
 def rag_answer(index, gemini_client, query: str, filters: dict) -> str:
-    # Embed query
-    result = gemini_client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=query,
-        config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
-    )
-    embedding = result.embeddings[0].values
-
-    # Retrieve
-    query_kwargs = {"vector": embedding, "top_k": 5, "include_metadata": True}
+    """Search using Pinecone integrated inference — no embedding call needed."""
+    query_params = {
+        "inputs": {"text": query},
+        "top_k": 5,
+    }
     if filters:
-        query_kwargs["filter"] = {k: {"$eq": v} for k, v in filters.items()}
-    results = index.query(**query_kwargs)
+        query_params["filter"] = {k: {"$eq": v} for k, v in filters.items()}
 
-    if not results.matches:
+    results = index.search(
+        namespace=NAMESPACE,
+        query=query_params,
+        fields=["chunk_text", "title", "company", "doc_type"],
+    )
+
+    hits = results.get("result", {}).get("hits", [])
+    if not hits:
         return "No relevant documents found. Generate and index some docs first."
 
     # Build context
     context_parts = []
-    for i, match in enumerate(results.matches, 1):
-        m = match.metadata
-        source = f"[{m.get('doc_type','')} | {m.get('company','')} | {m.get('title','')}]"
-        context_parts.append(f"--- Source {i}: {source} ---\n{m.get('text','')}")
+    for i, hit in enumerate(hits, 1):
+        f = hit.get("fields", {})
+        source = f"[{f.get('doc_type','')} | {f.get('company','')} | {f.get('title','')}]"
+        context_parts.append(f"--- Source {i}: {source} ---\n{f.get('chunk_text','')}")
     context = "\n\n".join(context_parts)
 
     # Answer
