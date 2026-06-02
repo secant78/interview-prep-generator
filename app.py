@@ -705,6 +705,106 @@ def page_analyze():
                 st.markdown(doc.get("transcript", ""))
 
 
+# ── Page: Documents ──────────────────────────────────────────────────────────
+def page_documents():
+    st.header("Document Library")
+    st.caption(f"All documents saved to: `{BASE_OUTPUT_DIR}`")
+
+    # Scan folder structure
+    if not BASE_OUTPUT_DIR.exists():
+        st.info("No documents found yet. Generate some docs first.")
+        return
+
+    # Collect all md files with metadata
+    all_docs = []
+    for run_folder in sorted(BASE_OUTPUT_DIR.iterdir(), reverse=True):
+        if not run_folder.is_dir():
+            continue
+        for md_file in sorted(run_folder.glob("*.md")):
+            parts = md_file.stem.split("_", 2)
+            date    = parts[0] if len(parts) > 0 else ""
+            company = parts[1] if len(parts) > 1 else ""
+            doc_type = parts[2] if len(parts) > 2 else md_file.stem
+            all_docs.append({
+                "path":     md_file,
+                "folder":   run_folder.name,
+                "date":     date,
+                "company":  company,
+                "doc_type": doc_type,
+                "filename": md_file.name,
+                "size_kb":  round(md_file.stat().st_size / 1024, 1),
+            })
+
+    if not all_docs:
+        st.info("No documents found yet. Generate some docs first.")
+        return
+
+    # ── Search / filter ───────────────────────────────────────────────────────
+    col_search, col_company, col_type = st.columns([3, 2, 2])
+    with col_search:
+        search = st.text_input("Search", placeholder="Search by company, doc type, or filename...")
+    with col_company:
+        companies = ["All"] + sorted({d["company"] for d in all_docs if d["company"]})
+        company_filter = st.selectbox("Company", companies)
+    with col_type:
+        doc_types = ["All"] + sorted({d["doc_type"] for d in all_docs if d["doc_type"]})
+        type_filter = st.selectbox("Doc Type", doc_types)
+
+    # Apply filters
+    filtered = all_docs
+    if search:
+        q = search.lower()
+        filtered = [d for d in filtered if q in d["filename"].lower()
+                    or q in d["company"].lower() or q in d["doc_type"].lower()]
+    if company_filter != "All":
+        filtered = [d for d in filtered if d["company"] == company_filter]
+    if type_filter != "All":
+        filtered = [d for d in filtered if d["doc_type"] == type_filter]
+
+    st.caption(f"{len(filtered)} document(s) found")
+
+    if not filtered:
+        st.warning("No documents match your search.")
+        return
+
+    st.divider()
+
+    # ── Group by run folder ───────────────────────────────────────────────────
+    folders = {}
+    for doc in filtered:
+        folders.setdefault(doc["folder"], []).append(doc)
+
+    for folder_name, docs in folders.items():
+        with st.expander(f"📁 {folder_name}  ({len(docs)} file{'s' if len(docs) != 1 else ''})", expanded=True):
+            for doc in docs:
+                col_name, col_size, col_dl, col_index = st.columns([5, 1, 1, 1])
+                with col_name:
+                    st.markdown(f"`{doc['doc_type']}`  —  {doc['filename']}")
+                with col_size:
+                    st.caption(f"{doc['size_kb']} KB")
+                with col_dl:
+                    content = doc["path"].read_text(encoding="utf-8")
+                    st.download_button(
+                        label="Download",
+                        data=content,
+                        file_name=doc["filename"],
+                        mime="text/markdown",
+                        key=f"dl_{doc['path']}",
+                    )
+                with col_index:
+                    if st.button("Index", key=f"idx_{doc['path']}", help="Add to Pinecone for chat"):
+                        with st.spinner("Indexing..."):
+                            index = get_pinecone_index()
+                            gemini = get_gemini()
+                            content = doc["path"].read_text(encoding="utf-8")
+                            count = ingest_doc(index, gemini, content, {
+                                "company":  doc["company"],
+                                "doc_type": doc["doc_type"],
+                                "date":     doc["date"],
+                            })
+                        st.success(f"{count} chunks indexed")
+
+
 # ── App Shell ─────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Interview Prep Generator",
@@ -714,7 +814,7 @@ st.set_page_config(
 
 st.title("Interview Prep Generator")
 
-tab1, tab2, tab3 = st.tabs(["Generate Documents", "Analyze Video", "Chat"])
+tab1, tab2, tab3, tab4 = st.tabs(["Generate Documents", "Analyze Video", "Documents", "Chat"])
 
 with tab1:
     page_generate()
@@ -723,4 +823,7 @@ with tab2:
     page_analyze()
 
 with tab3:
+    page_documents()
+
+with tab4:
     page_chat()
