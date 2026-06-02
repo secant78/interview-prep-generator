@@ -26,12 +26,16 @@ Generate a full markdown document following this EXACT structure. Be thorough, s
 
 # THE COMPLETE STORY
 ## A Faceless Man's Declaration
-[Candidate full name]
-[Title from resume]
-[Years of experience summary]
-[Career progression line: Company1 → Company2 → ... → Current]
-Targeting: [Company] — [Role Title]
-Prepared: [Current month year]
+
+**[Candidate full name]**
+*[Title from resume]*
+
+| | |
+|---|---|
+| **Experience** | [Years of experience summary] |
+| **Career Arc** | Company1 → Company2 → ... → Current |
+| **Targeting** | [Company] — [Role Title] |
+| **Prepared** | [Current month year] |
 
 ---
 
@@ -46,7 +50,14 @@ Prepared: [Current month year]
 [Write a 5-7 sentence pitch in first person. Mention years of experience, the 2-3 most relevant skills for this role, specific migration/platform work, and end with why this specific role is the right next step. Make it concrete — name tools, scale metrics, and outcomes.]
 
 ### Why Each Move Made Sense
-[For each job transition in the resume, write a short paragraph explaining what the previous role gave the candidate and what the next role added. Format as: "PreviousCompany → NextCompany (year range)" with 3-4 sentences per transition. Thread the narrative toward the target role.]
+[For each job transition in the resume, write a short paragraph explaining what the previous role gave the candidate and what the next role added. Format each transition exactly as shown below. Thread the narrative toward the target role.]
+
+#### 🏢 PreviousCompany → NextCompany
+*[Start year] — [End year]*
+
+[3-4 sentences explaining what the previous role provided and what the move added. Be specific about skills, tools, and growth.]
+
+[Repeat this exact format for every transition, with a blank line between each one.]
 
 ---
 
@@ -290,7 +301,7 @@ Generate a full markdown document following this EXACT structure:
 
 # MOCK INTERVIEW Q&A
 [Company] — [Role Title]
-Format: Technical Interview | 15 Questions + Scoring Rubric
+Format: Technical Interview | 15 Questions
 Prepared: [Month Year]
 
 ---
@@ -311,10 +322,6 @@ Questions Q1–Q5 cover [core area 1] (core). Q6–Q10 cover [core area 2 and 3]
 **Strong answer:**
 "[Write the complete answer in first person. This should be the answer a senior engineer who has done this work would give. Be specific, step-by-step where applicable, and reference patterns from the resume. 10-20 sentences. Include specific tool names, failure modes, and the 'why' behind decisions.]"
 
-Score 5 if: [what a complete answer includes — 3-4 criteria]
-Score 3 if: [what a partial answer looks like — 1-2 criteria]
-Score 1 if: [what a weak answer looks like]
-
 ---
 
 ## SECTION B: [Core Area 2 and 3 from JD] (Core Knowledge)
@@ -328,22 +335,6 @@ Score 1 if: [what a weak answer looks like]
 [5 questions — Q11 through Q15. Include at least one "tell me about a time" question, one multi-tier architecture scenario, one network troubleshooting scenario, and one decision-framework question. Same format.]
 
 ---
-
-## Scoring Rubric
-
-Create a markdown table: Q | Topic | Target Score | AMBER/Notes
-
-- Target Score: 4+ for core areas, 3+ for supporting areas
-- AMBER/Notes: flag any question that maps to a resume gap, and note the bridging answer
-
-After the table, write 2-3 sentences on what the overall target score pattern should be.
-
-Scoring guide:
-- 5: Complete answer with operational depth and real examples
-- 4: Correct answer with most important details
-- 3: Correct answer with key gaps — acceptable for non-core areas
-- 2: Partially correct with significant gaps
-- 1: Incorrect or vague
 
 End of Mock Interview Q&A     Prepared: [Month Year]"""
 
