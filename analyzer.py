@@ -127,39 +127,41 @@ GROQ_CHUNK_SECONDS  = 1500  # 25-minute chunks — safely under Groq's ~30-min d
 
 
 def _split_audio(audio_path: str, chunk_seconds: int) -> list[str]:
-    """Split an audio file into fixed-length chunks. Returns list of temp file paths."""
-    chunk_paths = []
+    """
+    Split an audio file into fixed-length chunks using ffmpeg.
+    Returns list of temp file paths.
+    """
+    import subprocess
+
+    # Get duration via av
     with av.open(audio_path) as in_c:
-        if not in_c.streams.audio:
-            return [audio_path]
         total = float(in_c.duration or 0) / 1_000_000
-        if total <= chunk_seconds:
-            return [audio_path]   # no splitting needed
+
+    if total <= chunk_seconds:
+        return [audio_path]   # no splitting needed
 
     n_chunks = int(total / chunk_seconds) + 1
+    chunk_paths = []
+
     for i in range(n_chunks):
         start_sec = i * chunk_seconds
         chunk_path = tempfile.mktemp(suffix=f"_chunk{i}.mp3")
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(start_sec),
+            "-i", audio_path,
+            "-t", str(chunk_seconds),
+            "-ar", "16000",
+            "-ac", "1",
+            "-b:a", "32k",
+            "-vn",
+            chunk_path,
+        ]
         try:
-            with av.open(audio_path) as in_c:
-                in_audio = in_c.streams.audio[0]
-                with av.open(chunk_path, "w") as out_c:
-                    out_audio = out_c.add_stream("libmp3lame", rate=16000)
-                    out_audio.bit_rate = 32_000
-                    for frame in in_c.decode(in_audio):
-                        t = float(frame.pts * in_audio.time_base)
-                        if t < start_sec:
-                            continue
-                        if t >= start_sec + chunk_seconds:
-                            break
-                        frame.pts = None
-                        for pkt in out_audio.encode(frame):
-                            out_c.mux(pkt)
-                    for pkt in out_audio.encode(None):
-                        out_c.mux(pkt)
-            if os.path.getsize(chunk_path) > 1000:   # skip empty chunks
+            subprocess.run(cmd, capture_output=True, check=True)
+            if os.path.exists(chunk_path) and os.path.getsize(chunk_path) > 1000:
                 chunk_paths.append(chunk_path)
-        except Exception:
+        except subprocess.CalledProcessError:
             pass
 
     return chunk_paths if chunk_paths else [audio_path]
@@ -806,7 +808,7 @@ def analyze_tech_prep(
                 raw_transcript=raw,
             ),
             config=types.GenerateContentConfig(
-                temperature=0.1, max_output_tokens=8192
+                temperature=0.1, max_output_tokens=65535
             ),
         )
         transcript = label_response.text
@@ -841,7 +843,7 @@ def analyze_tech_prep(
                 ),
             ],
             config=types.GenerateContentConfig(
-                temperature=0.2, max_output_tokens=8192
+                temperature=0.2, max_output_tokens=65535
             ),
         )
         transcript = transcript_response.text
@@ -861,7 +863,7 @@ def analyze_tech_prep(
             interviewee_name=interviewee_name,
         ),
         config=types.GenerateContentConfig(
-            temperature=0.3, max_output_tokens=8192
+            temperature=0.3, max_output_tokens=65535
         ),
     )
     study_guide = guide_response.text
@@ -991,7 +993,7 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
                 raw_transcript=raw_transcript,
             ),
             config=types.GenerateContentConfig(
-                temperature=0.1, max_output_tokens=8192
+                temperature=0.1, max_output_tokens=65535
             ),
         )
         transcript = label_response.text
@@ -1030,7 +1032,7 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
                 ),
             ],
             config=types.GenerateContentConfig(
-                temperature=0.2, max_output_tokens=8192
+                temperature=0.2, max_output_tokens=65535
             ),
         )
         transcript = transcript_response.text
@@ -1086,7 +1088,7 @@ def _analyze_gemini_only(client, video_path, filename, mime, model, log,
     video_response = client.models.generate_content(
         model=model,
         contents=[video_part, video_prompt],
-        config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=8192),
+        config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=65535),
     )
     video_output = video_response.text
 
@@ -1131,7 +1133,7 @@ def _text_calls(gemini, model, transcript, visual_analysis, log,
     text_response = gemini.models.generate_content(
         model=model,
         contents=TEXT_PROMPT_TEMPLATE.format(transcript=transcript),
-        config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=8192),
+        config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=65535),
     )
     text_analysis = text_response.text
     n += 1
@@ -1144,7 +1146,7 @@ def _text_calls(gemini, model, transcript, visual_analysis, log,
             visual_analysis=visual_analysis,
             text_analysis=text_analysis,
         ),
-        config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=8192),
+        config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=65535),
     )
     report = combine_response.text
     n += 1
@@ -1158,7 +1160,7 @@ def _text_calls(gemini, model, transcript, visual_analysis, log,
             interviewee_name=interviewee_name,
             interviewer_name=interviewer_name,
         ),
-        config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=8192),
+        config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=65535),
     )
     intel = intel_response.text
 
