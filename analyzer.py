@@ -1,12 +1,14 @@
 """
-Interview Video Analyzer — Hybrid Qwen + Gemini Strategy
-- Frame extraction  → Qwen2.5-VL  (visual analysis: body language, eye contact, posture)
-- Audio extraction  → Gemini       (transcription: full timestamped transcript)
+Interview Video Analyzer — Frame-based Gemini Strategy
+- Frame extraction  → Gemini       (visual analysis from sampled JPEG frames)
+- Audio extraction  → Groq Whisper (free transcription, if GROQ_API_KEY set)
+                   → Gemini       (transcription fallback via audio upload)
 - Call 3 (text)    → Gemini       (speech + answer quality analysis from transcript)
 - Call 4 (text)    → Gemini       (combine visual + text into final report)
 - Call 5 (text)    → Gemini       (interview intelligence: Q&A, tools, concepts)
 
-Falls back to Gemini-only (video upload) if no DASHSCOPE_API_KEY is set.
+Sends 1 frame every 10 seconds as inline JPEG images — no video upload needed,
+no Qwen/DashScope dependency. ~$0.01-0.02 for visual analysis regardless of length.
 """
 
 import base64
@@ -19,6 +21,7 @@ from io import BytesIO
 import av
 from google import genai
 from google.genai import types
+from cost_tracker import CostTracker
 
 SUPPORTED_MIME = {
     "mp4":  "video/mp4",
@@ -31,11 +34,10 @@ SUPPORTED_MIME = {
     "mpg":  "video/mpeg",
 }
 
-FRAMES_PER_SECOND = 0.125   # 1 frame every 8 seconds
-MAX_FRAMES        = 150      # cap for very long videos
+FRAMES_PER_SECOND = 0.1     # 1 frame every 10 seconds
 FRAME_WIDTH       = 640
 FRAME_HEIGHT      = 360
-FRAME_QUALITY     = 65       # JPEG quality
+FRAME_QUALITY     = 65      # JPEG quality
 
 
 # ── Frame & audio extraction ──────────────────────────────────────────────────
@@ -60,8 +62,6 @@ def extract_frames(video_path: str) -> list[str]:
             b64 = base64.b64encode(buf.getvalue()).decode()
             frames.append(f"data:image/jpeg;base64,{b64}")
             next_t = t + interval
-            if len(frames) >= MAX_FRAMES:
-                break
 
     return frames
 
@@ -748,19 +748,16 @@ def get_mime(filename: str) -> str | None:
     return SUPPORTED_MIME.get(ext)
 
 
-def _build_qwen_client():
-    """Return an OpenAI client pointed at DashScope, or None if no key."""
-    key = os.getenv("DASHSCOPE_API_KEY", "").strip()
-    if not key:
-        return None
-    try:
-        from openai import OpenAI
-        return OpenAI(
-            api_key=key,
-            base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        )
-    except ImportError:
-        return None
+def _frames_to_parts(frames: list[str]) -> list[types.Part]:
+    """Convert base64 data-URI frames to Gemini inline image Parts."""
+    parts = []
+    for frame in frames:
+        b64 = frame.split(",", 1)[1]
+        parts.append(types.Part.from_bytes(
+            data=base64.b64decode(b64),
+            mime_type="image/jpeg",
+        ))
+    return parts
 
 
 # ── Tech Prep analyzer ───────────────────────────────────────────────────────
@@ -795,12 +792,16 @@ def analyze_tech_prep(
     log(f"Step 1/{total} — Extracting and transcribing audio ({svc})...")
     audio_path, audio_mime = extract_audio(video_path)
 
+    tracker = CostTracker(model=model)
+    label_resp_obj      = None
+    transcript_resp_obj = None
+
     if not audio_path:
         transcript = "# Tech Prep Transcript\n\n*No audio track detected in this video.*"
     elif use_groq:
         raw = transcribe_with_groq(audio_path, groq_key)
         log(f"Step 2/{total} — Adding speaker labels (Gemini text)...")
-        label_response = client.models.generate_content(
+        label_resp = client.models.generate_content(
             model=model,
             contents=SPEAKER_LABEL_PROMPT.format(
                 interviewee_name=interviewee_name,
@@ -811,7 +812,8 @@ def analyze_tech_prep(
                 temperature=0.1, max_output_tokens=65535
             ),
         )
-        transcript = label_response.text
+        transcript = label_resp.text
+        label_resp_obj = label_resp
         try:
             os.unlink(audio_path)
         except Exception:
@@ -833,7 +835,7 @@ def analyze_tech_prep(
         audio_part = types.Part.from_uri(
             file_uri=audio_file.uri, mime_type=audio_mime
         )
-        transcript_response = client.models.generate_content(
+        transcript_resp = client.models.generate_content(
             model=model,
             contents=[
                 audio_part,
@@ -846,7 +848,8 @@ def analyze_tech_prep(
                 temperature=0.2, max_output_tokens=65535
             ),
         )
-        transcript = transcript_response.text
+        transcript = transcript_resp.text
+        transcript_resp_obj = transcript_resp
         try:
             client.files.delete(name=audio_file.name)
             os.unlink(audio_path)
@@ -868,8 +871,14 @@ def analyze_tech_prep(
     )
     study_guide = guide_response.text
 
+    if label_resp_obj:
+        tracker.add("Speaker labeling", label_resp_obj)
+    if transcript_resp_obj:
+        tracker.add("Transcription", transcript_resp_obj)
+    tracker.add("Study guide generation", guide_response)
+
     log("Done.")
-    return study_guide, transcript
+    return study_guide, transcript, tracker
 
 
 # ── Main analyzer ─────────────────────────────────────────────────────────────
@@ -884,17 +893,15 @@ def analyze_video(
     interviewer_name: str = "Interviewer",
 ) -> tuple[str, str, str]:
     """
-    Analyze an interview video using a hybrid Qwen + Gemini strategy.
+    Analyze an interview video using frame-based Gemini visual analysis.
 
-    Strategy (if DASHSCOPE_API_KEY is set):
-      Call 1 — Qwen2.5-VL:    visual analysis from extracted frames (no audio cost)
-      Call 2 — Gemini audio:  transcript from extracted audio (audio tokens only)
-      Call 3 — Gemini text:   speech + content analysis
-      Call 4 — Gemini text:   combine into final report
-      Call 5 — Gemini text:   interview intelligence doc
-
-    Fallback (no DASHSCOPE_API_KEY):
-      Original Gemini-only flow (video upload for transcript + visual).
+    Strategy:
+      Call 1 — Gemini (frames):  visual analysis from sampled JPEG frames (1 per 10s)
+      Call 2 — Groq Whisper:     transcription (free, if GROQ_API_KEY set)
+             — Gemini audio:     transcription fallback
+      Call 3 — Gemini text:      speaker labeling (if Groq used) or speech analysis
+      Call 4 — Gemini text:      combine into final report
+      Call 5 — Gemini text:      interview intelligence doc
 
     Returns (report_markdown, transcript_markdown, intel_markdown).
     """
@@ -908,12 +915,9 @@ def analyze_video(
         ext = filename.rsplit(".", 1)[-1].lower()
         raise ValueError(f"Unsupported format: .{ext}")
 
-    qwen = _build_qwen_client()
-
-    if qwen:
-        return _analyze_hybrid(
+    return _analyze_hybrid(
             gemini=client,
-            qwen=qwen,
+            qwen=None,
             video_path=video_path,
             filename=filename,
             model=model,
@@ -921,31 +925,21 @@ def analyze_video(
             interviewee_name=interviewee_name,
             interviewer_name=interviewer_name,
         )
-    else:
-        log("No DASHSCOPE_API_KEY found — using Gemini-only mode.")
-        return _analyze_gemini_only(
-            client=client,
-            video_path=video_path,
-            filename=filename,
-            mime=mime,
-            model=model,
-            log=log,
-            interviewee_name=interviewee_name,
-            interviewer_name=interviewer_name,
-        )
 
 
-# ── Hybrid path ───────────────────────────────────────────────────────────────
+
+# ── Frame-based Gemini path ───────────────────────────────────────────────────
 
 def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
                     interviewee_name, interviewer_name):
+    """qwen param kept for signature compatibility but is no longer used."""
 
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
     use_groq  = bool(groq_key)
     total     = 6 if use_groq else 5
 
     # ── Extract frames ────────────────────────────────────────────────────────
-    log("Extracting video frames for Qwen visual analysis...")
+    log(f"Extracting video frames (1 every {int(1/FRAMES_PER_SECOND)}s)...")
     frames = extract_frames(video_path)
     log(f"  {len(frames)} frames extracted.")
 
@@ -955,26 +949,26 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
     audio_path, audio_mime = extract_audio(video_path)
     log("  Audio extracted." if audio_path else "  No audio track found.")
 
-    # ── Call 1: Qwen visual analysis ──────────────────────────────────────────
-    log(f"Call 1/{total} — Visual analysis (Qwen2.5-VL, frames only)...")
+    # ── Call 1: Gemini visual analysis (inline frames) ────────────────────────
+    log(f"Call 1/{total} — Visual analysis (Gemini, {len(frames)} frames)...")
     visual_prompt = VISUAL_ONLY_PROMPT.format(
         interviewee_name=interviewee_name,
         interviewer_name=interviewer_name,
     )
-    qwen_response = qwen.chat.completions.create(
-        model="qwen2.5-vl-72b-instruct",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "video", "video": frames, "fps": FRAMES_PER_SECOND},
-                {"type": "text", "text": visual_prompt},
-            ],
-        }],
-        max_tokens=4096,
+    image_parts = _frames_to_parts(frames)
+    visual_response_obj = gemini.models.generate_content(
+        model=model,
+        contents=image_parts + [types.Part.from_text(visual_prompt)],
+        config=types.GenerateContentConfig(
+            temperature=0.1, max_output_tokens=4096,
+        ),
     )
-    visual_analysis = qwen_response.choices[0].message.content
+    visual_analysis = visual_response_obj.text
 
     # ── Call 2: Transcription ─────────────────────────────────────────────────
+    transcript_response_obj = None
+    label_response_obj      = None
+
     if not audio_path:
         transcript = "# Interview Transcript\n\n*No audio track detected in this video.*"
         call_offset = 2
@@ -985,7 +979,7 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
 
         # ── Call 3: Gemini text — add speaker labels ──────────────────────────
         log(f"Call 3/{total} — Adding speaker labels (Gemini text)...")
-        label_response = gemini.models.generate_content(
+        label_resp = gemini.models.generate_content(
             model=model,
             contents=SPEAKER_LABEL_PROMPT.format(
                 interviewee_name=interviewee_name,
@@ -996,7 +990,8 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
                 temperature=0.1, max_output_tokens=65535
             ),
         )
-        transcript = label_response.text
+        transcript = label_resp.text
+        label_response_obj = label_resp
         call_offset = 3
 
         try:
@@ -1022,7 +1017,7 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
         audio_part = types.Part.from_uri(
             file_uri=audio_file.uri, mime_type=audio_mime
         )
-        transcript_response = gemini.models.generate_content(
+        transcript_resp = gemini.models.generate_content(
             model=model,
             contents=[
                 audio_part,
@@ -1035,7 +1030,8 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
                 temperature=0.2, max_output_tokens=65535
             ),
         )
-        transcript = transcript_response.text
+        transcript = transcript_resp.text
+        transcript_response_obj = transcript_resp
         call_offset = 2
 
         try:
@@ -1045,7 +1041,7 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
             pass
 
     # ── Remaining text calls (Gemini) ─────────────────────────────────────────
-    return _text_calls(
+    report, transcript, intel, text_responses = _text_calls(
         gemini=gemini,
         model=model,
         transcript=transcript,
@@ -1056,6 +1052,20 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
         call_offset=call_offset,
         total_calls=total,
     )
+
+    # ── Build cost tracker ────────────────────────────────────────────────────
+    tracker = CostTracker(model=model)
+    tracker.add_image_tokens(f"Visual analysis ({len(frames)} frames)", len(frames))
+    if visual_response_obj is not None:
+        tracker.add("Visual analysis (Gemini)", visual_response_obj)
+    if transcript_response_obj is not None:
+        tracker.add("Transcription", transcript_response_obj)
+    if label_response_obj is not None:
+        tracker.add("Speaker labeling", label_response_obj)
+    for label, resp in text_responses:
+        tracker.add(label, resp)
+
+    return report, transcript, intel, tracker
 
 
 # ── Gemini-only fallback path ─────────────────────────────────────────────────
@@ -1109,7 +1119,7 @@ def _analyze_gemini_only(client, video_path, filename, mime, model, log,
     else:
         transcript = transcript_raw.strip()
 
-    return _text_calls(
+    report, transcript, intel, text_responses = _text_calls(
         gemini=client,
         model=model,
         transcript=transcript,
@@ -1120,14 +1130,21 @@ def _analyze_gemini_only(client, video_path, filename, mime, model, log,
         call_offset=1,
         total_calls=4,
     )
+    tracker = CostTracker(model=model)
+    tracker.add("Transcript + visual analysis (full video)", video_response)
+    for label, resp in text_responses:
+        tracker.add(label, resp)
+    return report, transcript, intel, tracker
 
 
 # ── Shared text-only calls (3-5 hybrid / 2-4 Gemini-only) ────────────────────
 
 def _text_calls(gemini, model, transcript, visual_analysis, log,
                 interviewee_name, interviewer_name, call_offset, total_calls):
+    """Returns (report, transcript, intel, responses) where responses is a list of (label, response)."""
 
     n = call_offset + 1
+    responses = []
 
     log(f"Call {n}/{total_calls} — Analyzing speech patterns and answer quality...")
     text_response = gemini.models.generate_content(
@@ -1136,6 +1153,7 @@ def _text_calls(gemini, model, transcript, visual_analysis, log,
         config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=65535),
     )
     text_analysis = text_response.text
+    responses.append(("Speech & content analysis", text_response))
     n += 1
 
     log(f"Call {n}/{total_calls} — Assembling final report...")
@@ -1149,6 +1167,7 @@ def _text_calls(gemini, model, transcript, visual_analysis, log,
         config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=65535),
     )
     report = combine_response.text
+    responses.append(("Final report assembly", combine_response))
     n += 1
 
     log(f"Call {n}/{total_calls} — Extracting interview intelligence...")
@@ -1163,9 +1182,10 @@ def _text_calls(gemini, model, transcript, visual_analysis, log,
         config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=65535),
     )
     intel = intel_response.text
+    responses.append(("Interview intelligence", intel_response))
 
     log("Done.")
-    return report, transcript, intel
+    return report, transcript, intel, responses
 
 
 # ── Gemini-only video prompt (fallback) ───────────────────────────────────────

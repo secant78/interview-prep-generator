@@ -13,7 +13,8 @@ from prompts import (
 MODEL = "gemini-2.5-flash"
 
 
-def _call(client: genai.Client, prompt: str) -> str:
+def _call(client: genai.Client, prompt: str):
+    """Returns (text, response) so callers can extract usage_metadata."""
     response = client.models.generate_content(
         model=MODEL,
         contents=prompt,
@@ -23,30 +24,30 @@ def _call(client: genai.Client, prompt: str) -> str:
             temperature=0.7,
         ),
     )
-    return response.text
+    return response.text, response
 
 
-def generate_story(client: genai.Client, resume: str, job_desc: str) -> str:
+def generate_story(client: genai.Client, resume: str, job_desc: str):
     return _call(client, STORY_DOC_PROMPT.format(resume=resume, job_desc=job_desc))
 
 
-def generate_playbook(client: genai.Client, resume: str, job_desc: str) -> str:
+def generate_playbook(client: genai.Client, resume: str, job_desc: str):
     return _call(client, PLAYBOOK_PROMPT.format(resume=resume, job_desc=job_desc))
 
 
-def generate_mock_qa(client: genai.Client, resume: str, job_desc: str) -> str:
+def generate_mock_qa(client: genai.Client, resume: str, job_desc: str):
     return _call(client, MOCK_QA_PROMPT.format(resume=resume, job_desc=job_desc))
 
 
-def generate_narratives(client: genai.Client, resume: str, job_desc: str) -> str:
+def generate_narratives(client: genai.Client, resume: str, job_desc: str):
     return _call(client, NARRATIVES_PROMPT.format(resume=resume, job_desc=job_desc))
 
 
-def generate_tools(client: genai.Client, resume: str, job_desc: str) -> str:
+def generate_tools(client: genai.Client, resume: str, job_desc: str):
     return _call(client, TOOLS_PROMPT.format(resume=resume, job_desc=job_desc))
 
 
-def generate_research(client: genai.Client, company: str, role: str, job_desc: str) -> str:
+def generate_research(client: genai.Client, company: str, role: str, job_desc: str):
     """Uses Gemini with Google Search grounding to research the company in real time."""
     prompt = RESEARCH_PROMPT.format(company=company, role=role, job_desc=job_desc)
     response = client.models.generate_content(
@@ -58,4 +59,4 @@ def generate_research(client: genai.Client, company: str, role: str, job_desc: s
             tools=[types.Tool(google_search=types.GoogleSearch())],
         ),
     )
-    return response.text
+    return response.text, response

@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from pinecone import Pinecone
+from cost_tracker import CostTracker
 
 load_dotenv()
 
@@ -91,7 +92,8 @@ def slugify(text: str) -> str:
     return text.replace(" ", "_").replace("/", "-")
 
 
-def generate_doc(gemini_client, doc_key: str, resume: str, job_desc: str, company: str = "", role: str = "") -> str:
+def generate_doc(gemini_client, doc_key: str, resume: str, job_desc: str, company: str = "", role: str = "") -> tuple[str, object]:
+    """Returns (text, response) — response carries usage_metadata for cost tracking."""
     from generators import (
         generate_story, generate_playbook, generate_mock_qa,
         generate_narratives, generate_tools, generate_research,
@@ -223,12 +225,15 @@ def page_generate():
             st.session_state.generated_docs = {}
 
         # ── Phase 1: Generate all docs ────────────────────────────────────────
+        from generators import MODEL as GEN_MODEL
+        tracker = CostTracker(model=GEN_MODEL)
         progress = st.progress(0)
         status = st.empty()
 
         for i, key in enumerate(doc_keys):
             status.text(f"Generating {DOC_OPTIONS[key]}... ({i+1}/{len(doc_keys)})")
-            content = generate_doc(gemini, key, resume_text, job_desc, company, role)
+            content, response = generate_doc(gemini, key, resume_text, job_desc, company, role)
+            tracker.add(DOC_OPTIONS[key], response)
             header = f"<!-- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Company: {company} | Role: {role} -->\n\n"
             full_content = header + content
 
@@ -243,7 +248,7 @@ def page_generate():
                 "doc_type": key,
                 "date": date_str,
             }
-            progress.progress((i + 1) / (len(doc_keys) + 1))  # +1 reserves space for indexing phase
+            progress.progress((i + 1) / (len(doc_keys) + 1))
 
         # ── Phase 2: Index all docs ───────────────────────────────────────────
         index = get_pinecone_index()
@@ -260,6 +265,8 @@ def page_generate():
         progress.progress(1.0)
         status.text("Done!")
         st.success(f"Generated and indexed {len(doc_keys)} document(s). Saved to: {run_dir}")
+        with st.expander(f"💰 API Cost — ${tracker.total_cost:.4f}", expanded=False):
+            st.markdown(tracker.summary())
 
     # Show results + download buttons
     if st.session_state.get("generated_docs"):
@@ -355,7 +362,7 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
         if video_type == "Tech Prep":
             # ── Tech Prep flow ────────────────────────────────────────────────
             update_status("Starting tech prep analysis...")
-            study_guide, transcript = analyze_tech_prep(
+            study_guide, transcript, cost_tracker = analyze_tech_prep(
                 client=gemini,
                 video_path=tmp_path,
                 filename=video_filename,
@@ -401,11 +408,13 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
                 f"Done! Saved to {run_dir} and indexed "
                 f"({guide_count + transcript_count} chunks) — ask questions in the Chat tab."
             )
+            job["cost_summary"] = cost_tracker.summary()
+            job["cost_total"]   = cost_tracker.total_cost
 
         else:
             # ── Interview flow ────────────────────────────────────────────────
             update_status("Starting interview analysis...")
-            report, transcript, intel = analyze_video(
+            report, transcript, intel, cost_tracker = analyze_video(
                 client=gemini,
                 video_path=tmp_path,
                 filename=video_filename,
@@ -462,6 +471,8 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
                 f"Done! Saved to {run_dir} and indexed "
                 f"({report_count + transcript_count + intel_count} chunks) — ask questions in the Chat tab."
             )
+            job["cost_summary"] = cost_tracker.summary()
+            job["cost_total"]   = cost_tracker.total_cost
 
         job["state"] = "done"
 
@@ -486,23 +497,16 @@ def page_analyze():
 
     st.header("Analyze Interview Video")
 
-    _qwen = has_qwen()
     _groq = bool(os.getenv("GROQ_API_KEY", "").strip())
 
-    if _qwen and _groq:
+    if _groq:
         st.success(
-            "**Full hybrid mode** — Qwen2.5-VL for visual analysis, "
-            "Groq Whisper (free) for transcription, Gemini for speaker labels + analysis."
-        )
-    elif _qwen:
-        st.success(
-            "**Hybrid mode** — Qwen2.5-VL for visual analysis, Gemini for audio transcription. "
-            "Add `GROQ_API_KEY` to .env to make transcription free."
+            "**Full mode** — Gemini frame analysis for visuals, Groq Whisper (free) for transcription."
         )
     else:
         st.info(
-            "**Gemini-only mode** — Add `DASHSCOPE_API_KEY` (Qwen) and `GROQ_API_KEY` (Groq) "
-            "to your .env to enable full hybrid mode and cut costs ~10x."
+            "**Standard mode** — Gemini frame analysis for visuals, Gemini for transcription. "
+            "Add `GROQ_API_KEY` to .env to make transcription free."
         )
 
     st.caption(
@@ -525,7 +529,7 @@ def page_analyze():
             ],
             index=1,
             key="av_model",
-            help="2.0 Flash Lite: cheapest (~$0.03/30min). 2.5 Flash: best value (~$0.08, recommended). 2.5 Pro: highest quality (~$1.25).",
+            help="2.0 Flash Lite: cheapest (~$0.01/30min). 2.5 Flash: best value (~$0.02, recommended). 2.5 Pro: highest quality (~$0.05).",
         )
 
     video_type = st.radio(
@@ -632,6 +636,9 @@ def page_analyze():
             if job.get("result"):
                 st.session_state.video_report = job["result"]
             st.success(job.get("status", "Done!"))
+            if job.get("cost_summary"):
+                with st.expander(f"💰 API Cost — ${job['cost_total']:.4f}", expanded=False):
+                    st.markdown(job["cost_summary"])
         elif state == "error":
             st.error(job.get("status", "An error occurred."))
 
@@ -705,6 +712,34 @@ def page_analyze():
                 st.markdown(doc.get("transcript", ""))
 
 
+# ── Pinecone indexed-doc lookup ───────────────────────────────────────────────
+def get_indexed_doc_keys(all_docs: list) -> set[str]:
+    """
+    Returns a set of 'company_doctype_date' strings that are already in Pinecone.
+    Fetches chunk0 IDs for all docs in one batch call to check existence.
+    """
+    try:
+        index = get_pinecone_index()
+        # Build a map of chunk0_id -> doc_key for every doc
+        id_map = {
+            f"{d['company']}_{d['doc_type']}_{d['date']}_chunk0": f"{d['company']}_{d['doc_type']}_{d['date']}"
+            for d in all_docs
+        }
+        if not id_map:
+            return set()
+        result = index.fetch(ids=list(id_map.keys()), namespace=NAMESPACE)
+        # Result may be a dict or an object depending on SDK version
+        if hasattr(result, "vectors"):
+            found_ids = set(result.vectors.keys())
+        elif isinstance(result, dict):
+            found_ids = set(result.get("vectors", {}).keys())
+        else:
+            found_ids = set()
+        return {id_map[vid] for vid in found_ids if vid in id_map}
+    except Exception:
+        return set()
+
+
 # ── Page: Documents ──────────────────────────────────────────────────────────
 def page_documents():
     st.header("Document Library")
@@ -717,17 +752,42 @@ def page_documents():
     if not BASE_OUTPUT_DIR.exists():
         st.info("No documents found yet. Generate some docs first.")
         return
+    # All known doc types — checked as exact suffixes against the filename stem
+    _ALL_DOCTYPES = [
+        "mock_qa", "tech_prep",          # multi-word first (longer match wins)
+        "video_analysis", "video_intel", "video_transcript",
+        "story", "playbook", "narratives", "tools", "research",
+        "analysis", "intel", "transcript",  # short video suffixes as fallback
+    ]
+    _SHORT_TO_FULL = {
+        "analysis":   "video_analysis",
+        "intel":      "video_intel",
+        "transcript": "video_transcript",
+    }
+
     for run_folder in sorted(BASE_OUTPUT_DIR.iterdir(), reverse=True):
         if not run_folder.is_dir():
             continue
+        # Extract date + company from folder name (always clean, e.g. 06-01-26_TechInnovate_Solutions)
+        folder_parts = run_folder.name.split("_", 1)
+        folder_date    = folder_parts[0] if len(folder_parts) > 0 else ""
+        folder_company = folder_parts[1] if len(folder_parts) > 1 else ""
+
         for md_file in sorted(run_folder.glob("*.md")):
-            parts = md_file.stem.split("_", 2)
+            stem = md_file.stem
+
+            detected_type = md_file.stem  # fallback
+            for dtype in _ALL_DOCTYPES:
+                if stem.endswith(f"_{dtype}"):
+                    detected_type = _SHORT_TO_FULL.get(dtype, dtype)
+                    break
+
             all_docs.append({
                 "path":     md_file,
                 "folder":   run_folder.name,
-                "date":     parts[0] if len(parts) > 0 else "",
-                "company":  parts[1] if len(parts) > 1 else "",
-                "doc_type": parts[2] if len(parts) > 2 else md_file.stem,
+                "date":     folder_date,
+                "company":  folder_company,
+                "doc_type": detected_type,
                 "filename": md_file.name,
                 "size_kb":  round(md_file.stat().st_size / 1024, 1),
             })
@@ -735,6 +795,10 @@ def page_documents():
     if not all_docs:
         st.info("No documents found yet. Generate some docs first.")
         return
+
+    # ── Fetch Pinecone indexed keys ───────────────────────────────────────────
+    with st.spinner("Checking Pinecone index..."):
+        indexed_keys = get_indexed_doc_keys(all_docs)
 
     # ── Search / filter ───────────────────────────────────────────────────────
     col_search, col_company, col_type = st.columns([3, 2, 2])
@@ -774,9 +838,15 @@ def page_documents():
         label = f"📁 {folder_name}  ({len(docs)} file{'s' if len(docs) != 1 else ''})"
         with st.expander(label, expanded=True):
             for doc in docs:
+                doc_key = f"{doc['company']}_{doc['doc_type']}_{doc['date']}"
+                is_indexed = doc_key in indexed_keys
+
                 col_name, col_size, col_dl, col_index = st.columns([5, 1, 1, 1])
                 with col_name:
-                    st.markdown(f"`{doc['doc_type']}`  —  {doc['filename']}")
+                    label = f"`{doc['doc_type']}`  —  {doc['filename']}"
+                    if is_indexed:
+                        label += "  ✅"
+                    st.markdown(label)
                 with col_size:
                     st.caption(f"{doc['size_kb']} KB")
                 with col_dl:
@@ -791,17 +861,21 @@ def page_documents():
                     )
                 with col_index:
                     idx_key = f"idx_{doc['path']}"
-                    if st.button("Index", key=idx_key, help="Add to Pinecone for chat"):
-                        with st.spinner("Indexing..."):
-                            index = get_pinecone_index()
-                            gemini = get_gemini()
-                            text = doc["path"].read_text(encoding="utf-8")
-                            count = ingest_doc(index, gemini, text, {
-                                "company":  doc["company"],
-                                "doc_type": doc["doc_type"],
-                                "date":     doc["date"],
-                            })
-                        st.success(f"{count} chunks indexed")
+                    if is_indexed:
+                        st.caption("✅ Indexed")
+                    else:
+                        if st.button("Index", key=idx_key, help="Add to Pinecone for chat"):
+                            with st.spinner("Indexing..."):
+                                index = get_pinecone_index()
+                                gemini = get_gemini()
+                                text = doc["path"].read_text(encoding="utf-8")
+                                count = ingest_doc(index, gemini, text, {
+                                    "company":  doc["company"],
+                                    "doc_type": doc["doc_type"],
+                                    "date":     doc["date"],
+                                })
+                            indexed_keys.add(doc_key)
+                            st.rerun()
 
 
 # ── App Shell ─────────────────────────────────────────────────────────────────

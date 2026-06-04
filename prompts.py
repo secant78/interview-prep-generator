@@ -320,7 +320,21 @@ Questions Q1–Q5 cover [core area 1] (core). Q6–Q10 cover [core area 2 and 3]
 ### Q[N]. [The question — make it specific to this role, not generic]
 
 **Strong answer:**
-"[Write the complete answer in first person. This should be the answer a senior engineer who has done this work would give. Be specific, step-by-step where applicable, and reference patterns from the resume. 10-20 sentences. Include specific tool names, failure modes, and the 'why' behind decisions.]"
+
+[1-2 sentence opening that directly answers the question in first person.]
+
+**[Sub-topic or approach label]:**
+[2-3 sentences of specific detail — name tools, company context, and outcome.]
+
+**[Sub-topic or approach label]:**
+[2-3 sentences of specific detail.]
+
+**[Sub-topic or approach label]:**
+[2-3 sentences of specific detail.]
+
+[1-2 sentence closing that ties it together and connects to the target role.]
+
+[Repeat this format for every question. Never write the answer as one long paragraph or use inline numbered lists (1. 2. 3.) — always use the bold label + paragraph structure above.]
 
 ---
 
