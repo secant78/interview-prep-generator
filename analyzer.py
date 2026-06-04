@@ -958,7 +958,7 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
     image_parts = _frames_to_parts(frames)
     visual_response_obj = gemini.models.generate_content(
         model=model,
-        contents=image_parts + [types.Part.from_text(visual_prompt)],
+        contents=image_parts + [visual_prompt],
         config=types.GenerateContentConfig(
             temperature=0.1, max_output_tokens=4096,
         ),
