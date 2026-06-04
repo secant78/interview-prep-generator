@@ -1,13 +1,13 @@
 # Interview Prep Generator
 
-An AI-powered interview preparation tool built with Streamlit and Google Gemini. Generate personalized prep documents from your resume and job description, analyze recorded interview videos for detailed feedback, chat with all your prep materials using RAG, and browse all your documents from Google Drive.
+An AI-powered interview preparation tool built with Streamlit and Google Gemini. Generate personalized prep documents from your resume and job description, analyze recorded interview videos for detailed feedback, chat with all your prep materials using RAG, and browse your document library.
 
 ---
 
 ## Features
 
 ### Generate Documents
-Upload your resume and paste a job description to generate up to 6 tailored documents. All documents are saved locally, uploaded to Google Drive, and automatically indexed into Pinecone for chat.
+Upload your resume and paste a job description to generate up to 6 tailored documents. All documents are saved locally and automatically indexed into Pinecone for chat.
 
 ---
 
@@ -37,13 +37,12 @@ A structured prep guide organized into 7 parts.
 ---
 
 #### 3. Mock Interview Q&A
-15 role-specific questions across three sections, each with a complete model answer and a scoring rubric.
+15 role-specific questions across three sections, each with a complete model answer.
 
 - **Section A (Q1–Q5):** Core technical area 1 from the JD
 - **Section B (Q6–Q10):** Core technical areas 2 and 3 from the JD
 - **Section C (Q11–Q15):** Migration scenarios, architecture decisions, and behavioral depth questions
-- Each question includes a **full first-person model answer** (10-20 sentences), specific tool references, and a 1–5 scoring rubric
-- Scoring table at the end maps every question to its topic, target score, and any AMBER notes from your resume
+- Each question includes a **full first-person model answer** (10-20 sentences) with bold sub-topic labels and specific tool references
 
 ---
 
@@ -81,12 +80,13 @@ A live-researched Company Intelligence Report generated using Gemini with Google
 - **Smart questions to ask** — 6-8 questions referencing specific findings from the research
 
 ### Analyze Video
-Upload a recorded interview video and get three AI-generated documents. Enter the interviewee and interviewer names so the transcript uses the correct labels. Uses a 4-call strategy:
+Upload a recorded interview video and get three AI-generated documents. Uses a frame-based analysis strategy — no full video upload required:
 
-- **Call 1 (video)** — Generates a timestamped transcript + analyzes everything visual: eye contact, body language, posture, hand gestures, facial expressions
-- **Call 2 (text only)** — Analyzes the transcript for filler words, speech pace, answer quality, STAR method usage, and coding question extraction
-- **Call 3 (text only)** — Combines both analyses into one unified final performance report with cross-references
-- **Call 4 (text only)** — Extracts structured interview intelligence from the transcript
+- **Call 1 (frames)** — Extracts 1 JPEG frame every 10 seconds and sends them to Gemini as inline images for visual analysis: body language, posture, facial expressions, engagement level
+- **Call 2 (audio)** — Transcribes audio via Groq Whisper (free) or Gemini audio fallback
+- **Call 3 (text)** — Analyzes transcript for filler words, speech pace, answer quality, STAR usage, coding question extraction
+- **Call 4 (text)** — Combines visual + text analyses into a unified performance report
+- **Call 5 (text)** — Extracts structured interview intelligence from the transcript
 
 **Performance Report includes:**
 - Overall score and executive summary
@@ -109,17 +109,21 @@ Upload a recorded interview video and get three AI-generated documents. Enter th
 - `[HH:MM:SS]` timestamps per speaker turn and every ~30 seconds
 - Filler words preserved for accuracy
 
-All three files are saved locally, uploaded to Google Drive, and automatically indexed into Pinecone so you can ask questions in the Chat tab (e.g. *"What questions did I struggle with?"*, *"What tools came up in the interview?"*).
+All three files are saved locally and automatically indexed into Pinecone so you can ask questions in the Chat tab.
 
 **Tech Prep mode:** Upload a study session or tech prep video instead of an interview. Generates a transcript + study guide covering all concepts, questions, and narratives discussed — automatically indexed for chat.
 
 **Company auto-detection:** If you leave the company field blank, Gemini detects the company from visual cues in the video (logos, screen content, email domains, interviewer intro) and uses it for the folder name.
 
+**API cost display:** After every video analysis or document generation run, a collapsible cost summary shows the exact token usage and dollar cost per API call.
+
 ### Document Library
-Browse all your generated documents pulled directly from Google Drive. Supports search by filename, company, or doc type, and filter dropdowns for company and doc type. Documents are grouped by run folder. From the library you can:
+Browse all your generated documents from your local documents folder. Supports search by filename, company, or doc type, and filter dropdowns for company and doc type. Documents are grouped by run folder. From the library you can:
 
 - **Download** any document
 - **Index** any document into Pinecone on demand
+- See a **✅ badge** next to documents already indexed in Pinecone
+- **Change the documents folder** via the 📂 Directory expander — saved to `.app_config.json` and persists across sessions
 
 ### Chat
 RAG-powered chat over all your generated and analyzed documents. Ask anything about your prep materials:
@@ -150,30 +154,15 @@ Create a `.env` file in the project root:
 GEMINI_API_KEY=your_gemini_api_key
 PINECONE_API_KEY=your_pinecone_api_key
 
-# Optional — enables hybrid mode (cuts video analysis cost ~10x)
+# Optional — free Whisper transcription (recommended)
 GROQ_API_KEY=your_groq_api_key
-DASHSCOPE_API_KEY=your_dashscope_api_key
-
-# Optional — enables Google Drive document storage
-GOOGLE_SERVICE_ACCOUNT_JSON=C:\path\to\service-account.json
-GOOGLE_DRIVE_FOLDER_NAME=interview-prep
-GOOGLE_DRIVE_FOLDER_ID=your_drive_folder_id
 ```
 
 - **Gemini API key:** [aistudio.google.com](https://aistudio.google.com) — requires billing enabled for video analysis
 - **Pinecone API key:** [pinecone.io](https://www.pinecone.io) — free tier is sufficient
 - **Groq API key:** [console.groq.com](https://console.groq.com) — free tier, used for Whisper transcription
-- **DashScope API key:** [dashscope.aliyuncs.com](https://dashscope.aliyuncs.com) — Qwen2.5-VL for visual analysis
 
-### 4. (Optional) Set up Google Drive
-Documents are automatically uploaded to Google Drive if configured. To enable:
-
-1. Create a service account in [Google Cloud Console](https://console.cloud.google.com) and download the JSON key
-2. Enable the **Google Drive API** on your project
-3. Create a folder in your Google Drive and share it with the service account email (Editor access)
-4. Copy the folder ID from the URL (`drive.google.com/drive/folders/<FOLDER_ID>`) and add it to `.env` as `GOOGLE_DRIVE_FOLDER_ID`
-
-### 5. Run the app
+### 4. Run the app
 ```bash
 streamlit run app.py
 ```
@@ -185,53 +174,57 @@ streamlit run app.py
 ```
 interview-prep-generator/
 ├── app.py              # Streamlit UI — Generate, Analyze Video, Documents, Chat tabs
-├── analyzer.py         # Video analysis logic (upload, transcript, visual + text analysis)
+├── analyzer.py         # Video analysis logic (frame extraction, transcript, visual + text analysis)
 ├── generators.py       # Document generation functions (one per doc type)
 ├── prompts.py          # All LLM prompts for document generation
 ├── ingest.py           # Pinecone ingestion utilities
-├── drive.py            # Google Drive integration (upload, list, download)
+├── cost_tracker.py     # API token + cost tracking across all calls
+├── drive.py            # Google Drive integration (kept for reference)
 ├── requirements.txt    # Python dependencies
 └── .streamlit/
-    └── config.toml     # Streamlit config (2GB upload + message size limits)
+    └── config.toml     # Streamlit config (2GB upload + message size limits, minimal toolbar)
 ```
 
 ---
 
-## Video Analysis Modes
+## Video Analysis
 
-| Mode | Description |
-|------|-------------|
-| **Gemini-only** | Default. Sends video directly to Gemini for transcription and visual analysis. |
-| **Hybrid (Qwen + Gemini)** | Add `DASHSCOPE_API_KEY`. Uses Qwen2.5-VL for visual analysis, Gemini for audio. |
-| **Full hybrid (Qwen + Groq + Gemini)** | Add both keys. Groq Whisper handles transcription for free, cutting cost ~10x. |
+### How it works
+Instead of uploading the full video file, the app extracts 1 JPEG frame every 10 seconds and sends them to Gemini as inline images. This keeps visual analysis cost nearly flat regardless of video length.
+
+| Duration | Frames sent | Visual cost |
+|----------|-------------|-------------|
+| 30 min | ~180 frames | ~$0.007 |
+| 60 min | ~360 frames | ~$0.014 |
+
+Transcription uses Groq Whisper (free) if `GROQ_API_KEY` is set, otherwise falls back to Gemini audio upload.
+
+### Cost by model (per 60-minute video)
+
+| Model | Cost | Best For |
+|-------|------|----------|
+| gemini-2.0-flash-lite | ~$0.01 | Quick, cheap feedback |
+| gemini-2.5-flash ⭐ | ~$0.02–0.04 | Best value — recommended |
+| gemini-2.5-pro | ~$0.05–0.10 | Highest quality |
+
+> Costs are shown live in the app after each run via the 💰 API Cost expander.
 
 ---
 
 ## Cost Estimates
 
 ### Document Generation
-Each document generation call uses Gemini 2.5 Flash on text only — costs fractions of a cent per document.
+Each document uses Gemini 2.5 Flash on text only — fractions of a cent per document (~$0.01 for all 6).
 
-### Video Analysis (per 30-minute video)
-
-| Model | Cost |
-|-------|------|
-| gemini-2.0-flash-lite | ~$0.03 |
-| gemini-2.5-flash | ~$0.08 |
-| gemini-2.5-pro | ~$1.25 |
-
-The 4-call strategy sends the video only once (Call 1). Calls 2, 3, and 4 are cheap text-only calls on the transcript, cutting cost significantly vs. sending the video multiple times.
-
-> **Note:** Gemini has a free tier but video analysis consumes a large number of tokens and will quickly exceed free limits. Enable billing on your Google Cloud project for uninterrupted use.
+### Video Analysis
+~$0.02–0.04 per 60-minute video with Gemini 2.5 Flash + Groq Whisper. The frame-based approach is ~4-8x cheaper than sending the full video.
 
 ---
 
 ## Tech Stack
 
-- **[Streamlit](https://streamlit.io)** — Web UI
-- **[Google Gemini](https://ai.google.dev)** — LLM for generation, analysis, and embeddings
-- **[Pinecone](https://www.pinecone.io)** — Vector database for RAG
-- **[Google Drive API](https://developers.google.com/drive)** — Cloud document storage
+- **[Streamlit](https://streamlit.io)** — Web UI with background threading for non-blocking video analysis
+- **[Google Gemini](https://ai.google.dev)** — LLM for generation, frame-based visual analysis, and RAG answers
+- **[Pinecone](https://www.pinecone.io)** — Vector database with integrated `multilingual-e5-large` embeddings
 - **[Groq](https://groq.com)** — Free Whisper transcription (optional)
-- **[Qwen2.5-VL](https://dashscope.aliyuncs.com)** — Visual analysis via DashScope (optional)
 - **[pypdf](https://pypdf.readthedocs.io)** — Resume PDF parsing
