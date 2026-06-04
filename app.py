@@ -24,12 +24,38 @@ load_dotenv()
 # visible on the next rerun without any module-level state.
 
 # ── Constants ────────────────────────────────────────────────────────────────
-PINECONE_INDEX  = "interview-prep"
-CHAT_MODEL      = "gemini-2.5-flash"
-EMBED_MODEL     = "multilingual-e5-large"   # Pinecone integrated inference — free tier
-NAMESPACE       = "__default__"
-BASE_OUTPUT_DIR = Path(r"C:\Users\Sean Cancino\Documents\interview-prep")
-BASE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+PINECONE_INDEX       = "interview-prep"
+CHAT_MODEL           = "gemini-2.5-flash"
+EMBED_MODEL          = "multilingual-e5-large"
+NAMESPACE            = "__default__"
+DEFAULT_OUTPUT_DIR   = Path(r"C:\Users\Sean Cancino\Documents\interview-prep")
+CONFIG_FILE          = Path(__file__).parent / ".app_config.json"
+
+
+def load_config() -> dict:
+    if CONFIG_FILE.exists():
+        import json
+        try:
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def save_config(cfg: dict):
+    import json
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def get_output_dir() -> Path:
+    """Return the current documents directory from config or default."""
+    cfg = load_config()
+    p = Path(cfg.get("output_dir", str(DEFAULT_OUTPUT_DIR)))
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+BASE_OUTPUT_DIR = get_output_dir()
 
 DOC_OPTIONS = {
     "story":      "The Complete Story",
@@ -217,7 +243,7 @@ def page_generate():
         company_slug = slugify(company)
 
         # Create a new folder for this run: e.g. 05-30-26_Comcast
-        run_dir = BASE_OUTPUT_DIR / f"{date_str}_{company_slug}"
+        run_dir = get_output_dir() / f"{date_str}_{company_slug}"
         run_dir.mkdir(parents=True, exist_ok=True)
         st.session_state.run_dir = str(run_dir)
 
@@ -379,7 +405,7 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
             if not company_slug:
                 company_slug = "TechPrep"
 
-            run_dir = BASE_OUTPUT_DIR / f"{date_str}_{company_slug}"
+            run_dir = get_output_dir() / f"{date_str}_{company_slug}"
             run_dir.mkdir(parents=True, exist_ok=True)
 
             guide_filename      = f"{date_str}_{company_slug}_{video_stem}_tech_prep.md"
@@ -436,7 +462,7 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
                         break
                 company_slug = slugify(detected) if detected.lower() != "unknown" else "Unknown"
 
-            run_dir = BASE_OUTPUT_DIR / f"{date_str}_{company_slug}"
+            run_dir = get_output_dir() / f"{date_str}_{company_slug}"
             run_dir.mkdir(parents=True, exist_ok=True)
 
             filename            = f"{date_str}_{company_slug}_{video_stem}_analysis.md"
@@ -744,12 +770,43 @@ def get_indexed_doc_keys(all_docs: list) -> set[str]:
 def page_documents():
     st.header("Document Library")
 
-    st.info(f"Showing local documents from `{BASE_OUTPUT_DIR}`")
+    # ── Directory settings ────────────────────────────────────────────────────
+    current_dir = get_output_dir()
+    with st.expander("📂 Documents Directory", expanded=False):
+        new_dir = st.text_input(
+            "Local documents folder",
+            value=str(current_dir),
+            key="docs_dir_input",
+            help="All generated documents and video analysis outputs will be saved here.",
+        )
+        col_save, col_reset = st.columns([1, 1])
+        with col_save:
+            if st.button("Save", key="docs_dir_save"):
+                p = Path(new_dir.strip())
+                try:
+                    p.mkdir(parents=True, exist_ok=True)
+                    cfg = load_config()
+                    cfg["output_dir"] = str(p)
+                    save_config(cfg)
+                    st.success(f"Directory updated to `{p}`")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Invalid path: {e}")
+        with col_reset:
+            if st.button("Reset to default", key="docs_dir_reset"):
+                cfg = load_config()
+                cfg["output_dir"] = str(DEFAULT_OUTPUT_DIR)
+                save_config(cfg)
+                st.success(f"Reset to `{DEFAULT_OUTPUT_DIR}`")
+                st.rerun()
+
+    st.info(f"Showing local documents from `{current_dir}`")
 
     # ── Load documents ────────────────────────────────────────────────────────
     all_docs = []
 
-    if not BASE_OUTPUT_DIR.exists():
+    docs_dir = get_output_dir()
+    if not docs_dir.exists():
         st.info("No documents found yet. Generate some docs first.")
         return
     # All known doc types — checked as exact suffixes against the filename stem
@@ -765,7 +822,7 @@ def page_documents():
         "transcript": "video_transcript",
     }
 
-    for run_folder in sorted(BASE_OUTPUT_DIR.iterdir(), reverse=True):
+    for run_folder in sorted(docs_dir.iterdir(), reverse=True):
         if not run_folder.is_dir():
             continue
         # Extract date + company from folder name (always clean, e.g. 06-01-26_TechInnovate_Solutions)
