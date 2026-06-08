@@ -316,59 +316,49 @@ def page_generate():
 def page_chat():
     st.header("Chat with Your Prep Docs")
 
-    if st.button("Clear Chat"):
-        st.session_state.messages = []
-        st.rerun()
-
-    filters = {}
+    # Keep the chat input fixed at the bottom and reduce Streamlit's default
+    # block padding so the title sits closer to the top of the page.
+    st.markdown(
+        """
+        <style>
+        section[data-testid="stMain"] > div:first-child {
+            padding-top: 1.5rem !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Fixed-height scrollable message window
-    chat_container = st.container(height=550, border=False)
-    with chat_container:
+    if st.session_state.messages and st.button("Clear Chat"):
+        st.session_state.messages = []
+        st.rerun()
+
+    # Render existing messages
+    if not st.session_state.messages:
+        st.caption("Ask anything about your prep docs — stories, model answers, technical deep dives, video feedback, and more.")
+    else:
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-    # Input stays below the container
     if prompt := st.chat_input("Ask anything about your interview prep..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
-
-        # Re-render all messages + new ones inside the container
-        with chat_container:
-            with st.chat_message("user"):
-                st.markdown(prompt)
-            with st.chat_message("assistant"):
-                with st.spinner("Searching docs..."):
-                    index = get_pinecone_index()
-                    gemini = get_gemini()
-                    response = rag_answer(index, gemini, prompt, filters)
-                st.markdown(response)
-
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        with st.chat_message("assistant"):
+            with st.spinner("Searching docs..."):
+                index = get_pinecone_index()
+                gemini = get_gemini()
+                response = rag_answer(index, gemini, prompt, {})
+            st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
-
-        # Scroll the container to the bottom
-        import streamlit.components.v1 as components
-        components.html(
-            """
-            <script>
-                const containers = window.parent.document.querySelectorAll(
-                    '[data-testid="stVerticalBlockBorderWrapper"]'
-                );
-                if (containers.length > 0) {
-                    const chatBox = containers[containers.length - 1];
-                    chatBox.scrollTop = chatBox.scrollHeight;
-                }
-            </script>
-            """,
-            height=0,
-        )
 
 
 # ── Video analysis background worker ─────────────────────────────────────────
-def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choice, company, interviewee_name, interviewer_name, video_type):
+def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choice, company, interviewee_name, interviewer_name, video_type, frames_per_second: float = 0.1):
     """
     Runs in a background thread. Writes progress + results into `job` dict
     (a plain Python dict, safe to write from any thread).
@@ -448,6 +438,7 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
                 status_callback=update_status,
                 interviewee_name=interviewee_name,
                 interviewer_name=interviewer_name,
+                frames_per_second=frames_per_second,
             )
             try:
                 os.unlink(tmp_path)
@@ -541,12 +532,11 @@ def page_analyze():
         "For coding interviews it will also extract the question and evaluate your solution."
     )
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         company = st.text_input("Company (optional)", placeholder="e.g. Comcast", key="av_company")
     with col2:
         model_choice = st.selectbox(
-
             "Model",
             options=[
                 "gemini-2.0-flash-lite",
@@ -557,6 +547,24 @@ def page_analyze():
             key="av_model",
             help="2.0 Flash Lite: cheapest (~$0.01/30min). 2.5 Flash: best value (~$0.02, recommended). 2.5 Pro: highest quality (~$0.05).",
         )
+    with col3:
+        frame_rate_label = st.selectbox(
+            "Frame Rate",
+            options=[
+                "1 frame / 10s — posture & presence (cheapest)",
+                "1 frame / 3s — hand gestures (recommended)",
+                "1 frame / 1s — frequent gestures (3× cost)",
+            ],
+            index=1,
+            key="av_frame_rate",
+            help="Higher rates catch more hand gestures but increase cost proportionally. Eye contact detection works well at any rate.",
+        )
+    _frame_rate_map = {
+        "1 frame / 10s — posture & presence (cheapest)": 0.1,
+        "1 frame / 3s — hand gestures (recommended)":   1/3,
+        "1 frame / 1s — frequent gestures (3× cost)":   1.0,
+    }
+    frames_per_second = _frame_rate_map[frame_rate_label]
 
     video_type = st.radio(
         "Video Type",
@@ -642,7 +650,7 @@ def page_analyze():
             gemini = get_gemini()
             thread = threading.Thread(
                 target=_run_analysis_thread,
-                args=(new_job, gemini, tmp.name, video_file.name, model_choice, company, interviewee_name, interviewer_name, video_type),
+                args=(new_job, gemini, tmp.name, video_file.name, model_choice, company, interviewee_name, interviewer_name, video_type, frames_per_second),
                 daemon=True,
             )
             thread.start()
@@ -652,12 +660,37 @@ def page_analyze():
             st.error(f"Failed to start analysis: {e}\n\n```\n{traceback.format_exc()}\n```")
 
     # ── Job status poller — runs every 3s without blocking other tabs ──────────
+    def _parse_progress(status: str) -> float:
+        """Estimate 0-1 progress from the analyzer's log message."""
+        import re
+        s = status.lower()
+        # "Call N/M" or "Step N/M" — the bulk of the work
+        m = re.search(r'(?:call|step)\s+(\d+)/(\d+)', s)
+        if m:
+            n, total = int(m.group(1)), int(m.group(2))
+            # Calls fill 20%–88% of the bar; each call is an equal slice
+            return 0.20 + (n - 1) / total * 0.68 + (0.68 / total) * 0.5
+        if 'indexing' in s or 'pinecone' in s:
+            return 0.92
+        if 'frames extracted' in s:
+            return 0.18
+        if 'extracting video frames' in s:
+            return 0.04
+        if 'extracting audio' in s or 'starting' in s:
+            return 0.10
+        if 'done' in s or 'saved' in s:
+            return 1.0
+        return 0.05
+
     @st.fragment(run_every=3)
     def _job_status():
         job = st.session_state.get("av_job", {})
         state = job.get("state", "idle")
         if state == "running":
-            st.info(f"⏳ {job.get('status', 'Working...')}")
+            status = job.get("status", "Working...")
+            pct = _parse_progress(status)
+            st.progress(pct)
+            st.caption(f"⏳ {status}")
         elif state == "done":
             if job.get("result"):
                 st.session_state.video_report = job["result"]
@@ -935,6 +968,313 @@ def page_documents():
                             st.rerun()
 
 
+# ── Page: Mock Interview ──────────────────────────────────────────────────────
+def _build_interview_summary_report(answers: list) -> str:
+    from datetime import datetime
+    lines = [f"# Mock Interview Summary — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"]
+    scored = [a for a in answers if a["answer"] != "[Skipped]"]
+    if scored:
+        avg = sum(a["result"].get("score", 0) for a in scored) / len(scored)
+        lines.append(f"**Average Score: {avg:.1f} / 10**\n")
+    for i, entry in enumerate(answers, 1):
+        result = entry["result"]
+        lines.append(f"---\n\n## Q{i} — Score: {result.get('score', 0)}/10\n")
+        lines.append(f"**Question:** {entry['question']}\n")
+        lines.append(f"**Your Answer:** {entry['answer']}\n")
+        lines.append(f"**Verdict:** {result.get('verdict', '')}\n")
+        if result.get("strengths"):
+            lines.append("**Strengths:**\n" + "\n".join(f"- {s}" for s in result["strengths"]) + "\n")
+        if result.get("improvements"):
+            lines.append("**Improvements:**\n" + "\n".join(f"- {s}" for s in result["improvements"]) + "\n")
+        if result.get("missed_points"):
+            lines.append("**Missed Points:**\n" + "\n".join(f"- {s}" for s in result["missed_points"]) + "\n")
+        if result.get("model_snippet"):
+            lines.append(f"**Model Snippet:** {result['model_snippet']}\n")
+    return "\n".join(lines)
+
+
+def page_interview():
+    import hashlib
+    import json as _json
+    import streamlit.components.v1 as components
+    from interview import generate_questions, score_answer, transcribe_mic_audio
+
+    st.header("Mock Interview")
+
+    iv = st.session_state
+
+    if "iv_state" not in iv:
+        iv.iv_state = "setup"
+
+    # ── Setup ──────────────────────────────────────────────────────────────────
+    if iv.iv_state == "setup":
+        st.markdown(
+            "Practice answering interview questions generated live from your prep documents. "
+            "Each answer is transcribed from your voice and scored by AI against your prep material."
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            n_q = st.selectbox("Number of questions", [5, 10, 15], index=0, key="iv_n_q")
+        with col2:
+            company = st.text_input("Filter by company (optional)", placeholder="e.g. Comcast", key="iv_setup_company")
+
+        tts_on = st.checkbox("Read questions aloud (browser TTS)", value=True, key="iv_tts_on")
+
+        has_groq = bool(os.getenv("GROQ_API_KEY", "").strip())
+        if has_groq:
+            st.success("Groq Whisper ready — your spoken answers will be auto-transcribed.")
+        else:
+            st.info("No GROQ_API_KEY — you can type your answers instead.")
+
+        if st.button("Start Interview", type="primary", key="iv_start"):
+            with st.spinner(f"Generating {n_q} questions from your prep docs..."):
+                index = get_pinecone_index()
+                gemini = get_gemini()
+                questions = generate_questions(index, gemini, n_q, company.strip())
+
+            if not questions:
+                st.error(
+                    "No documents found in Pinecone. Generate and index some prep documents first, "
+                    "then come back to start a mock interview."
+                )
+                return
+
+            iv.iv_questions    = questions
+            iv.iv_q_idx        = 0
+            iv.iv_answers      = []
+            iv.iv_company      = slugify(company.strip()) if company.strip() else ""
+            iv.iv_tts_enabled  = tts_on
+            iv.iv_should_speak = True
+            iv.iv_audio_hash   = None
+            iv.iv_state        = "interviewing"
+            st.rerun()
+
+    # ── Active interview ───────────────────────────────────────────────────────
+    elif iv.iv_state in ("interviewing", "answered"):
+        questions = iv.iv_questions
+        q_idx     = iv.iv_q_idx
+        total     = len(questions)
+        question  = questions[q_idx]
+
+        # Progress bar + end button
+        prog_col, stop_col = st.columns([6, 1])
+        with prog_col:
+            st.progress(q_idx / total, text=f"Question {q_idx + 1} of {total}")
+        with stop_col:
+            if st.button("End", key="iv_stop", help="Go to summary"):
+                iv.iv_state = "summary"
+                st.rerun()
+
+        # ── TTS: speak the question once per question ──────────────────────────
+        if iv.iv_tts_enabled and iv.get("iv_should_speak"):
+            iv.iv_should_speak = False
+            safe_q = _json.dumps(question)
+            components.html(
+                f"""<script>
+                (function() {{
+                    var syn = window.top.speechSynthesis || window.speechSynthesis;
+                    var Utt  = window.top.SpeechSynthesisUtterance || SpeechSynthesisUtterance;
+                    if (!syn || !Utt) return;
+                    syn.cancel();
+                    setTimeout(function() {{
+                        var msg = new Utt({safe_q});
+                        msg.rate  = 0.92;
+                        msg.pitch = 1.0;
+                        syn.speak(msg);
+                    }}, 150);
+                }})();
+                </script>""",
+                height=0,
+            )
+
+        # ── Question display ───────────────────────────────────────────────────
+        st.markdown(f"### Question {q_idx + 1} of {total}")
+        st.info(f"**{question}**")
+
+        col_replay, _ = st.columns([1, 5])
+        with col_replay:
+            if iv.iv_tts_enabled and st.button("🔊 Replay", key=f"iv_replay_{q_idx}"):
+                iv.iv_should_speak = True
+                st.rerun()
+
+        # ── Answer input (only while interviewing) ─────────────────────────────
+        if iv.iv_state == "interviewing":
+            has_groq = bool(os.getenv("GROQ_API_KEY", "").strip())
+
+            if has_groq:
+                audio = st.audio_input("🎙️ Record your answer", key=f"iv_audio_{q_idx}")
+
+                if audio is not None:
+                    audio_bytes = audio.read()
+                    audio_hash  = hashlib.md5(audio_bytes).hexdigest()
+
+                    if iv.get("iv_audio_hash") != audio_hash:
+                        iv.iv_audio_hash = audio_hash
+                        with st.spinner("Transcribing..."):
+                            transcript = transcribe_mic_audio(audio_bytes, getattr(audio, "type", "audio/webm"))
+                        st.session_state[f"iv_edit_{q_idx}"] = transcript
+                        st.rerun()
+
+                st.caption("Or type / edit your answer below:")
+            else:
+                st.caption("Type your answer below:")
+
+            answer = st.text_area(
+                "Your answer",
+                key=f"iv_edit_{q_idx}",
+                height=160,
+                placeholder=(
+                    "Record audio above — transcript will appear here automatically. "
+                    "Or type your answer directly."
+                ),
+                label_visibility="collapsed",
+            )
+
+            col_sub, col_skip = st.columns([3, 1])
+            with col_sub:
+                if st.button(
+                    "Submit Answer",
+                    type="primary",
+                    disabled=not (answer and answer.strip()),
+                    key=f"iv_submit_{q_idx}",
+                ):
+                    with st.spinner("Scoring your answer..."):
+                        index  = get_pinecone_index()
+                        gemini = get_gemini()
+                        result = score_answer(index, gemini, question, answer.strip(), iv.iv_company)
+                    iv.iv_answers.append({
+                        "question": question,
+                        "answer":   answer.strip(),
+                        "result":   result,
+                    })
+                    iv.iv_state = "answered"
+                    st.rerun()
+
+            with col_skip:
+                if st.button("Skip", key=f"iv_skip_{q_idx}"):
+                    iv.iv_answers.append({
+                        "question": question,
+                        "answer":   "[Skipped]",
+                        "result": {
+                            "score": 0, "verdict": "Skipped",
+                            "strengths": [], "improvements": [],
+                            "missed_points": [], "model_snippet": "",
+                        },
+                    })
+                    if q_idx >= total - 1:
+                        iv.iv_state = "summary"
+                    else:
+                        iv.iv_q_idx       += 1
+                        iv.iv_audio_hash   = None
+                        iv.iv_should_speak = True
+                        iv.iv_state        = "interviewing"
+                    st.rerun()
+
+        # ── Score display (answered state) ─────────────────────────────────────
+        elif iv.iv_state == "answered":
+            latest = iv.iv_answers[-1]
+            result = latest["result"]
+            score  = result.get("score", 0)
+
+            score_color = "green" if score >= 8 else ("orange" if score >= 5 else "red")
+            st.markdown(f"### :{score_color}[{score} / 10] — {result.get('verdict', '')}")
+
+            col_s, col_i = st.columns(2)
+            with col_s:
+                strengths = result.get("strengths", [])
+                if strengths:
+                    st.markdown("**✅ Strengths**")
+                    for s in strengths:
+                        st.markdown(f"- {s}")
+            with col_i:
+                improvements = result.get("improvements", [])
+                if improvements:
+                    st.markdown("**🔧 Improvements**")
+                    for imp in improvements:
+                        st.markdown(f"- {imp}")
+
+            missed = result.get("missed_points", [])
+            if missed:
+                st.markdown("**⚠️ Key points you didn't mention**")
+                for mp in missed:
+                    st.markdown(f"- {mp}")
+
+            snippet = result.get("model_snippet", "")
+            if snippet:
+                with st.expander("💡 How to strengthen this answer"):
+                    st.markdown(snippet)
+
+            with st.expander("Your answer (transcript)", expanded=False):
+                st.write(latest["answer"])
+
+            is_last = q_idx >= total - 1
+            if is_last:
+                if st.button("View Summary →", type="primary", key="iv_to_summary"):
+                    iv.iv_state = "summary"
+                    st.rerun()
+            else:
+                if st.button("Next Question →", type="primary", key=f"iv_next_{q_idx}"):
+                    iv.iv_q_idx       += 1
+                    iv.iv_audio_hash   = None
+                    iv.iv_should_speak = True
+                    iv.iv_state        = "interviewing"
+                    st.rerun()
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+    elif iv.iv_state == "summary":
+        answers = iv.get("iv_answers", [])
+        scored  = [a for a in answers if a["answer"] != "[Skipped]"]
+
+        if scored:
+            avg = sum(a["result"].get("score", 0) for a in scored) / len(scored)
+            score_color = "green" if avg >= 8 else ("orange" if avg >= 5 else "red")
+            st.markdown(f"## Interview Complete")
+            st.markdown(f"**Average Score: :{score_color}[{avg:.1f} / 10]** across {len(scored)} answered question(s)")
+        else:
+            st.markdown("## Interview Complete — No answers recorded.")
+
+        st.divider()
+
+        for i, entry in enumerate(answers):
+            result = entry["result"]
+            score  = result.get("score", 0)
+            label  = f"Q{i+1} — {score}/10 — {entry['question'][:70]}{'...' if len(entry['question']) > 70 else ''}"
+            with st.expander(label, expanded=False):
+                st.markdown(f"**{result.get('verdict', '')}**")
+                if entry["answer"] != "[Skipped]":
+                    st.markdown(f"*Your answer:* {entry['answer'][:300]}{'...' if len(entry['answer']) > 300 else ''}")
+                col_s2, col_i2 = st.columns(2)
+                with col_s2:
+                    if result.get("strengths"):
+                        for s in result["strengths"]:
+                            st.markdown(f"✅ {s}")
+                with col_i2:
+                    if result.get("improvements"):
+                        for imp in result["improvements"]:
+                            st.markdown(f"🔧 {imp}")
+                if result.get("model_snippet"):
+                    st.caption(f"💡 {result['model_snippet']}")
+
+        st.divider()
+        col_new, col_dl = st.columns(2)
+        with col_new:
+            if st.button("Start New Interview", type="primary", key="iv_new"):
+                for k in [k for k in st.session_state if k.startswith("iv_")]:
+                    del st.session_state[k]
+                st.rerun()
+        if answers:
+            with col_dl:
+                report = _build_interview_summary_report(answers)
+                st.download_button(
+                    "Download Summary (.md)",
+                    data=report,
+                    file_name="mock_interview_summary.md",
+                    mime="text/markdown",
+                    key="iv_dl",
+                )
+
+
 # ── App Shell ─────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Interview Prep Generator",
@@ -944,7 +1284,7 @@ st.set_page_config(
 
 st.title("Interview Prep Generator")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Generate Documents", "Analyze Video", "Documents", "Chat"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Generate Documents", "Analyze Video", "Documents", "Chat", "Mock Interview"])
 
 with tab1:
     page_generate()
@@ -957,3 +1297,6 @@ with tab3:
 
 with tab4:
     page_chat()
+
+with tab5:
+    page_interview()

@@ -34,18 +34,18 @@ SUPPORTED_MIME = {
     "mpg":  "video/mpeg",
 }
 
-FRAMES_PER_SECOND = 0.1     # 1 frame every 10 seconds
-FRAME_WIDTH       = 640
-FRAME_HEIGHT      = 360
-FRAME_QUALITY     = 65      # JPEG quality
+DEFAULT_FRAMES_PER_SECOND = 0.1   # 1 frame every 10 seconds
+FRAME_WIDTH               = 640
+FRAME_HEIGHT              = 360
+FRAME_QUALITY             = 65    # JPEG quality
 
 
 # ── Frame & audio extraction ──────────────────────────────────────────────────
 
-def extract_frames(video_path: str) -> list[str]:
-    """Extract frames as base64 JPEG data-URIs at FRAMES_PER_SECOND."""
+def extract_frames(video_path: str, frames_per_second: float = DEFAULT_FRAMES_PER_SECOND) -> list[str]:
+    """Extract frames as base64 JPEG data-URIs at the given rate."""
     frames = []
-    interval = 1.0 / FRAMES_PER_SECOND
+    interval = 1.0 / frames_per_second
 
     with av.open(video_path) as container:
         stream = container.streams.video[0]
@@ -891,6 +891,7 @@ def analyze_video(
     status_callback=None,
     interviewee_name: str = "Candidate",
     interviewer_name: str = "Interviewer",
+    frames_per_second: float = DEFAULT_FRAMES_PER_SECOND,
 ) -> tuple[str, str, str]:
     """
     Analyze an interview video using frame-based Gemini visual analysis.
@@ -924,6 +925,7 @@ def analyze_video(
             log=log,
             interviewee_name=interviewee_name,
             interviewer_name=interviewer_name,
+            frames_per_second=frames_per_second,
         )
 
 
@@ -931,7 +933,8 @@ def analyze_video(
 # ── Frame-based Gemini path ───────────────────────────────────────────────────
 
 def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
-                    interviewee_name, interviewer_name):
+                    interviewee_name, interviewer_name,
+                    frames_per_second: float = DEFAULT_FRAMES_PER_SECOND):
     """qwen param kept for signature compatibility but is no longer used."""
 
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
@@ -939,8 +942,9 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
     total     = 6 if use_groq else 5
 
     # ── Extract frames ────────────────────────────────────────────────────────
-    log(f"Extracting video frames (1 every {int(1/FRAMES_PER_SECOND)}s)...")
-    frames = extract_frames(video_path)
+    interval_s = round(1.0 / frames_per_second, 1)
+    log(f"Extracting video frames (1 every {interval_s}s)...")
+    frames = extract_frames(video_path, frames_per_second)
     log(f"  {len(frames)} frames extracted.")
 
     # ── Extract audio ─────────────────────────────────────────────────────────
