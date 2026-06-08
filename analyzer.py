@@ -545,8 +545,9 @@ TRANSCRIPT:
 
 ### Q1: "[Exact question text]" `[timestamp]`
 **Type:** [Behavioral / Technical / Situational / Clarifying / Small talk]
-**Answer Summary:** [3-5 sentences — mention actual examples, companies, tools referenced.]
+**Answer Summary:** [3-5 sentences — what the candidate actually said, including examples, companies, and tools referenced.]
 **Direct Quote:** "[Key sentence verbatim from transcript]"
+**Best Answer:** [Write a complete, polished model answer (6-10 sentences) for this specific question. Base it on the strongest points the candidate made, then add what was missing or underdeveloped. Use STAR structure for behavioral questions. For technical questions, include concrete specifics: tools, architecture decisions, scale metrics, trade-offs. Write in first person as if the candidate is delivering it. This should be a ready-to-use practice answer.]
 **Follow-up questions:** [Any follow-ups, or "None"]
 
 *(repeat for every question — do not skip any)*
