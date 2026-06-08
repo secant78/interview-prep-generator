@@ -364,7 +364,7 @@ def page_chat():
 
 
 # ── Video analysis background worker ─────────────────────────────────────────
-def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choice, company, interviewee_name, interviewer_name, video_type, frames_per_second: float = 0.1):
+def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choice, company, interviewee_name, interviewer_name, video_type, frames_per_second: float = 0.1, audio_only: bool = False):
     """
     Runs in a background thread. Writes progress + results into `job` dict
     (a plain Python dict, safe to write from any thread).
@@ -450,6 +450,7 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
                 interviewee_name=interviewee_name,
                 interviewer_name=interviewer_name,
                 frames_per_second=frames_per_second,
+                audio_only=audio_only,
             )
             try:
                 os.unlink(tmp_path)
@@ -582,16 +583,28 @@ def page_analyze():
     }
     frames_per_second = _frame_rate_map[frame_rate_label]
 
-    video_type = st.radio(
-        "Video Type",
-        options=["Interview", "Tech Prep"],
-        horizontal=True,
-        key="av_video_type",
-        help=(
-            "Interview: full analysis — visual feedback, speech patterns, performance report, intel doc. "
-            "Tech Prep: transcript + study guide with all concepts, questions, and narratives to prepare."
-        ),
-    )
+    col_vtype, col_audio = st.columns([3, 2])
+    with col_vtype:
+        video_type = st.radio(
+            "Video Type",
+            options=["Interview", "Tech Prep"],
+            horizontal=True,
+            key="av_video_type",
+            help=(
+                "Interview: full analysis — visual feedback, speech patterns, performance report, intel doc. "
+                "Tech Prep: transcript + study guide with all concepts, questions, and narratives to prepare."
+            ),
+        )
+    with col_audio:
+        audio_only = st.checkbox(
+            "🎙️ Audio only (skip visual analysis)",
+            key="av_audio_only",
+            help=(
+                "Skips frame extraction and visual analysis entirely. "
+                "Faster and cheaper — transcription, speech quality, and interview intelligence only. "
+                "Use when you don't need body language / eye contact feedback."
+            ),
+        ) if video_type == "Interview" else False
 
     col3, col4 = st.columns(2)
     with col3:
@@ -666,7 +679,7 @@ def page_analyze():
             gemini = get_gemini()
             thread = threading.Thread(
                 target=_run_analysis_thread,
-                args=(new_job, gemini, tmp.name, video_file.name, model_choice, company, interviewee_name, interviewer_name, video_type, frames_per_second),
+                args=(new_job, gemini, tmp.name, video_file.name, model_choice, company, interviewee_name, interviewer_name, video_type, frames_per_second, audio_only),
                 daemon=True,
             )
             thread.start()

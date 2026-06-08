@@ -1,0 +1,50 @@
+[
+  {
+    "timestamp": "2026-06-08T15:51:01.074918",
+    "tab": "Analyze Video",
+    "company": "Hudson_Insurance",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.045501,
+    "input_tokens": 169627,
+    "output_tokens": 33429,
+    "calls": [
+      {
+        "label": "Visual analysis (255 frames)",
+        "input_tokens": 65790,
+        "output_tokens": 0,
+        "cost": 0.009869
+      },
+      {
+        "label": "Visual analysis (Gemini)",
+        "input_tokens": 66113,
+        "output_tokens": 161,
+        "cost": 0.010014
+      },
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 9419,
+        "output_tokens": 10541,
+        "cost": 0.007737
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 11053,
+        "output_tokens": 5569,
+        "cost": 0.004999
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 6164,
+        "output_tokens": 8149,
+        "cost": 0.005814
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 11088,
+        "output_tokens": 9009,
+        "cost": 0.007069
+      }
+    ],
+    "video_type": "Interview"
+  }
+]

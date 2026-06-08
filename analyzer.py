@@ -892,6 +892,7 @@ def analyze_video(
     interviewee_name: str = "Candidate",
     interviewer_name: str = "Interviewer",
     frames_per_second: float = DEFAULT_FRAMES_PER_SECOND,
+    audio_only: bool = False,
 ) -> tuple[str, str, str]:
     """
     Analyze an interview video using frame-based Gemini visual analysis.
@@ -926,6 +927,7 @@ def analyze_video(
             interviewee_name=interviewee_name,
             interviewer_name=interviewer_name,
             frames_per_second=frames_per_second,
+            audio_only=audio_only,
         )
 
 
@@ -934,18 +936,28 @@ def analyze_video(
 
 def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
                     interviewee_name, interviewer_name,
-                    frames_per_second: float = DEFAULT_FRAMES_PER_SECOND):
+                    frames_per_second: float = DEFAULT_FRAMES_PER_SECOND,
+                    audio_only: bool = False):
     """qwen param kept for signature compatibility but is no longer used."""
 
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
     use_groq  = bool(groq_key)
-    total     = 6 if use_groq else 5
 
-    # ── Extract frames ────────────────────────────────────────────────────────
-    interval_s = round(1.0 / frames_per_second, 1)
-    log(f"Extracting video frames (1 every {interval_s}s)...")
-    frames = extract_frames(video_path, frames_per_second)
-    log(f"  {len(frames)} frames extracted.")
+    # Audio-only mode skips visual analysis entirely (saves 1 call)
+    if audio_only:
+        total          = 4 if use_groq else 3
+        frames         = []
+        visual_analysis   = "*Audio-only mode — no visual analysis performed.*"
+        visual_response_obj = None
+    else:
+        total = 6 if use_groq else 5
+
+    # ── Extract frames (skipped in audio-only mode) ───────────────────────────
+    if not audio_only:
+        interval_s = round(1.0 / frames_per_second, 1)
+        log(f"Extracting video frames (1 every {interval_s}s)...")
+        frames = extract_frames(video_path, frames_per_second)
+        log(f"  {len(frames)} frames extracted.")
 
     # ── Extract audio ─────────────────────────────────────────────────────────
     svc = "Groq Whisper" if use_groq else "Gemini"
@@ -953,36 +965,39 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
     audio_path, audio_mime = extract_audio(video_path)
     log("  Audio extracted." if audio_path else "  No audio track found.")
 
-    # ── Call 1: Gemini visual analysis (inline frames) ────────────────────────
-    log(f"Call 1/{total} — Visual analysis (Gemini, {len(frames)} frames)...")
-    visual_prompt = VISUAL_ONLY_PROMPT.format(
-        interviewee_name=interviewee_name,
-        interviewer_name=interviewer_name,
-    )
-    image_parts = _frames_to_parts(frames)
-    visual_response_obj = gemini.models.generate_content(
-        model=model,
-        contents=image_parts + [visual_prompt],
-        config=types.GenerateContentConfig(
-            temperature=0.1, max_output_tokens=4096,
-        ),
-    )
-    visual_analysis = visual_response_obj.text
+    # ── Call 1: Gemini visual analysis — skipped in audio-only mode ───────────
+    if not audio_only:
+        log(f"Call 1/{total} — Visual analysis (Gemini, {len(frames)} frames)...")
+        visual_prompt = VISUAL_ONLY_PROMPT.format(
+            interviewee_name=interviewee_name,
+            interviewer_name=interviewer_name,
+        )
+        image_parts = _frames_to_parts(frames)
+        visual_response_obj = gemini.models.generate_content(
+            model=model,
+            contents=image_parts + [visual_prompt],
+            config=types.GenerateContentConfig(
+                temperature=0.1, max_output_tokens=4096,
+            ),
+        )
+        visual_analysis = visual_response_obj.text
 
-    # ── Call 2: Transcription ─────────────────────────────────────────────────
+    # ── Transcription ─────────────────────────────────────────────────────────
     transcript_response_obj = None
     label_response_obj      = None
 
     if not audio_path:
         transcript = "# Interview Transcript\n\n*No audio track detected in this video.*"
-        call_offset = 2
+        call_offset = 0 if audio_only else 2
     elif use_groq:
         # ── Groq Whisper: fast + free ─────────────────────────────────────────
-        log(f"Call 2/{total} — Transcribing audio (Groq Whisper, free)...")
+        transcribe_call_n = 1 if audio_only else 2
+        log(f"Call {transcribe_call_n}/{total} — Transcribing audio (Groq Whisper, free)...")
         raw_transcript = transcribe_with_groq(audio_path, groq_key)
 
-        # ── Call 3: Gemini text — add speaker labels ──────────────────────────
-        log(f"Call 3/{total} — Adding speaker labels (Gemini text)...")
+        # ── Speaker labels ────────────────────────────────────────────────────
+        label_call_n = 2 if audio_only else 3
+        log(f"Call {label_call_n}/{total} — Adding speaker labels (Gemini text)...")
         label_resp = gemini.models.generate_content(
             model=model,
             contents=SPEAKER_LABEL_PROMPT.format(
@@ -996,7 +1011,7 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
         )
         transcript = label_resp.text
         label_response_obj = label_resp
-        call_offset = 3
+        call_offset = 2 if audio_only else 3
 
         try:
             os.unlink(audio_path)
@@ -1004,7 +1019,8 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
             pass
     else:
         # ── Gemini audio fallback ─────────────────────────────────────────────
-        log(f"Call 2/{total} — Transcribing audio (Gemini)...")
+        transcribe_call_n = 1 if audio_only else 2
+        log(f"Call {transcribe_call_n}/{total} — Transcribing audio (Gemini)...")
         with open(audio_path, "rb") as f:
             audio_file = gemini.files.upload(
                 file=f,
@@ -1036,7 +1052,7 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
         )
         transcript = transcript_resp.text
         transcript_response_obj = transcript_resp
-        call_offset = 2
+        call_offset = 1 if audio_only else 2
 
         try:
             gemini.files.delete(name=audio_file.name)
@@ -1059,7 +1075,8 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
 
     # ── Build cost tracker ────────────────────────────────────────────────────
     tracker = CostTracker(model=model)
-    tracker.add_image_tokens(f"Visual analysis ({len(frames)} frames)", len(frames))
+    if not audio_only:
+        tracker.add_image_tokens(f"Visual analysis ({len(frames)} frames)", len(frames))
     if visual_response_obj is not None:
         tracker.add("Visual analysis (Gemini)", visual_response_obj)
     if transcript_response_obj is not None:
