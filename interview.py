@@ -14,7 +14,7 @@ CHAT_MODEL = "gemini-2.5-flash"
 NAMESPACE = "__default__"
 
 
-def generate_questions(index, gemini: genai.Client, n_questions: int, company_filter: str = "") -> list[str]:
+def generate_questions(index, gemini: genai.Client, n_questions: int, company_filter: str = "", tracker=None) -> list[str]:
     """Generate interview questions via RAG from the candidate's prep docs."""
     query = "mock interview questions technical behavioral situational experience"
     search_kwargs = {
@@ -56,6 +56,8 @@ INTERVIEW PREP DOCUMENTS:
         contents=prompt,
         config=types.GenerateContentConfig(temperature=0.8),
     )
+    if tracker is not None:
+        tracker.add("Generate questions", response)
 
     questions = []
     for line in response.text.strip().splitlines():
@@ -75,6 +77,7 @@ def score_answer(
     question: str,
     answer: str,
     company_filter: str = "",
+    tracker=None,
 ) -> dict:
     """Score a candidate's spoken answer against their prep material using RAG."""
     search_kwargs = {
@@ -123,6 +126,9 @@ Be brutally specific — reference exact things they said or didn't say. Return 
         contents=prompt,
         config=types.GenerateContentConfig(temperature=0.2),
     )
+
+    if tracker is not None:
+        tracker.add(f"Score: {question[:50]}", response)
 
     text = response.text.strip()
     if "```" in text:

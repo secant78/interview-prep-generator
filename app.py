@@ -293,6 +293,12 @@ def page_generate():
         st.success(f"Generated and indexed {len(doc_keys)} document(s). Saved to: {run_dir}")
         with st.expander(f"💰 API Cost — ${tracker.total_cost:.4f}", expanded=False):
             st.markdown(tracker.summary())
+        # Persist to cost log
+        from cost_log import append_cost_record, build_record
+        append_cost_record(build_record(
+            "Generate Documents", tracker, company_slug,
+            {"doc_keys": doc_keys, "role": role},
+        ))
 
     # Show results + download buttons
     if st.session_state.get("generated_docs"):
@@ -426,6 +432,11 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
             )
             job["cost_summary"] = cost_tracker.summary()
             job["cost_total"]   = cost_tracker.total_cost
+            from cost_log import build_record
+            job["cost_record"] = build_record(
+                "Analyze Video", cost_tracker, company_slug,
+                {"video_type": "Tech Prep"},
+            )
 
         else:
             # ── Interview flow ────────────────────────────────────────────────
@@ -490,6 +501,11 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
             )
             job["cost_summary"] = cost_tracker.summary()
             job["cost_total"]   = cost_tracker.total_cost
+            from cost_log import build_record
+            job["cost_record"] = build_record(
+                "Analyze Video", cost_tracker, company_slug,
+                {"video_type": "Interview"},
+            )
 
         job["state"] = "done"
 
@@ -682,7 +698,11 @@ def page_analyze():
             return 1.0
         return 0.05
 
-    @st.fragment(run_every=3)
+    # Only poll when a job is actively running — stops background reruns when idle
+    _current_job_state = st.session_state.get("av_job", {}).get("state", "idle")
+    _poll_interval = 3 if _current_job_state == "running" else None
+
+    @st.fragment(run_every=_poll_interval)
     def _job_status():
         job = st.session_state.get("av_job", {})
         state = job.get("state", "idle")
@@ -698,6 +718,11 @@ def page_analyze():
             if job.get("cost_summary"):
                 with st.expander(f"💰 API Cost — ${job['cost_total']:.4f}", expanded=False):
                     st.markdown(job["cost_summary"])
+            # Write cost record once (guard with flag so fragment doesn't double-log)
+            if job.get("cost_record") and not job.get("cost_logged"):
+                job["cost_logged"] = True
+                from cost_log import append_cost_record
+                append_cost_record(job["cost_record"])
         elif state == "error":
             st.error(job.get("status", "An error occurred."))
 
@@ -1031,7 +1056,7 @@ def page_interview():
             with st.spinner(f"Generating {n_q} questions from your prep docs..."):
                 index = get_pinecone_index()
                 gemini = get_gemini()
-                questions = generate_questions(index, gemini, n_q, company.strip())
+                questions = generate_questions(index, gemini, n_q, company.strip(), tracker=iv.iv_cost_tracker)
 
             if not questions:
                 st.error(
@@ -1047,6 +1072,8 @@ def page_interview():
             iv.iv_tts_enabled  = tts_on
             iv.iv_should_speak = True
             iv.iv_audio_hash   = None
+            iv.iv_cost_logged  = False
+            iv.iv_cost_tracker = CostTracker(model=CHAT_MODEL)
             iv.iv_state        = "interviewing"
             st.rerun()
 
@@ -1142,7 +1169,7 @@ def page_interview():
                     with st.spinner("Scoring your answer..."):
                         index  = get_pinecone_index()
                         gemini = get_gemini()
-                        result = score_answer(index, gemini, question, answer.strip(), iv.iv_company)
+                        result = score_answer(index, gemini, question, answer.strip(), iv.iv_company, tracker=iv.iv_cost_tracker)
                     iv.iv_answers.append({
                         "question": question,
                         "answer":   answer.strip(),
@@ -1226,6 +1253,15 @@ def page_interview():
         answers = iv.get("iv_answers", [])
         scored  = [a for a in answers if a["answer"] != "[Skipped]"]
 
+        # Log cost once when summary is first shown
+        if not iv.get("iv_cost_logged") and iv.get("iv_cost_tracker"):
+            iv.iv_cost_logged = True
+            from cost_log import append_cost_record, build_record
+            append_cost_record(build_record(
+                "Mock Interview", iv.iv_cost_tracker, iv.get("iv_company", ""),
+                {"n_questions": len(answers), "n_answered": len(scored)},
+            ))
+
         if scored:
             avg = sum(a["result"].get("score", 0) for a in scored) / len(scored)
             score_color = "green" if avg >= 8 else ("orange" if avg >= 5 else "red")
@@ -1275,6 +1311,144 @@ def page_interview():
                 )
 
 
+# ── Page: API Costs ──────────────────────────────────────────────────────────
+def page_costs():
+    from datetime import datetime
+    import pandas as pd
+    from cost_log import load_cost_log
+
+    st.header("API Cost History")
+
+    log = load_cost_log()
+
+    if not log:
+        st.info("No cost records yet. Records are saved automatically after every Generate, Analyze Video, or Mock Interview run.")
+        return
+
+    # Parse timestamps and add display fields
+    for r in log:
+        r["_dt"] = datetime.fromisoformat(r["timestamp"])
+        r["_month"] = r["_dt"].strftime("%Y-%m")
+        r["_month_label"] = r["_dt"].strftime("%b %Y")
+
+    # Sort newest first
+    log.sort(key=lambda r: r["_dt"], reverse=True)
+
+    # ── Top metrics ───────────────────────────────────────────────────────────
+    all_time   = sum(r["total_cost"] for r in log)
+    now        = datetime.now()
+    cur_month  = now.strftime("%Y-%m")
+    prev_month = (now.replace(day=1) - __import__("datetime").timedelta(days=1)).strftime("%Y-%m")
+    this_mo    = sum(r["total_cost"] for r in log if r["_month"] == cur_month)
+    last_mo    = sum(r["total_cost"] for r in log if r["_month"] == prev_month)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("All-time total",  f"${all_time:.4f}")
+    m2.metric("This month",      f"${this_mo:.4f}")
+    m3.metric("Last month",      f"${last_mo:.4f}")
+    m4.metric("Total runs",      len(log))
+
+    st.divider()
+
+    # ── Monthly breakdown table ───────────────────────────────────────────────
+    with st.expander("📅 Monthly Breakdown by Tab", expanded=False):
+        months = sorted({r["_month"] for r in log}, reverse=True)
+        tabs_seen = sorted({r["tab"] for r in log})
+        rows = []
+        for mo in months:
+            mo_records = [r for r in log if r["_month"] == mo]
+            row = {"Month": datetime.strptime(mo, "%Y-%m").strftime("%b %Y")}
+            mo_total = 0.0
+            for tab in tabs_seen:
+                tab_cost = sum(r["total_cost"] for r in mo_records if r["tab"] == tab)
+                row[tab] = f"${tab_cost:.4f}" if tab_cost else "—"
+                mo_total += tab_cost
+            row["Month Total"] = f"${mo_total:.4f}"
+            rows.append(row)
+        if rows:
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    col_f1, col_f2, col_f3 = st.columns(3)
+    with col_f1:
+        month_options = ["All time"] + [
+            datetime.strptime(m, "%Y-%m").strftime("%b %Y")
+            for m in sorted({r["_month"] for r in log}, reverse=True)
+        ]
+        sel_month = st.selectbox("Month", month_options, key="costs_month")
+    with col_f2:
+        tab_options = ["All tabs"] + sorted({r["tab"] for r in log})
+        sel_tab = st.selectbox("Tab", tab_options, key="costs_tab")
+    with col_f3:
+        company_options = ["All companies"] + sorted({r.get("company", "") for r in log if r.get("company")})
+        sel_company = st.selectbox("Company", company_options, key="costs_company")
+
+    # Apply filters
+    filtered = log
+    if sel_month != "All time":
+        filtered = [r for r in filtered if r["_month_label"] == sel_month]
+    if sel_tab != "All tabs":
+        filtered = [r for r in filtered if r["tab"] == sel_tab]
+    if sel_company != "All companies":
+        filtered = [r for r in filtered if r.get("company") == sel_company]
+
+    st.caption(f"{len(filtered)} run(s) — ${sum(r['total_cost'] for r in filtered):.4f} total")
+    st.divider()
+
+    # ── Run history ───────────────────────────────────────────────────────────
+    if not filtered:
+        st.info("No runs match the selected filters.")
+        return
+
+    for r in filtered:
+        ts   = r["_dt"].strftime("%b %d %Y  %I:%M %p")
+        comp = f" — {r['company']}" if r.get("company") else ""
+        label = f"**${r['total_cost']:.4f}**  ·  {r['tab']}{comp}  ·  {ts}"
+
+        with st.expander(label, expanded=False):
+            # Meta row
+            info_cols = st.columns(4)
+            info_cols[0].caption(f"**Model:** {r.get('model', '—')}")
+            info_cols[1].caption(f"**Input:** {r.get('input_tokens', 0):,} tokens")
+            info_cols[2].caption(f"**Output:** {r.get('output_tokens', 0):,} tokens")
+
+            # Extra meta (doc_keys, video_type, n_questions, etc.)
+            extra_parts = []
+            if r.get("video_type"):
+                extra_parts.append(f"Video type: {r['video_type']}")
+            if r.get("doc_keys"):
+                extra_parts.append(f"Docs: {', '.join(r['doc_keys'])}")
+            if r.get("n_questions") is not None:
+                extra_parts.append(f"Questions: {r['n_questions']} ({r.get('n_answered', r['n_questions'])} answered)")
+            if extra_parts:
+                info_cols[3].caption("  ·  ".join(extra_parts))
+
+            # Breakdown table
+            calls = r.get("calls", [])
+            if calls:
+                st.markdown("**Breakdown**")
+                rows = []
+                for c in calls:
+                    rows.append({
+                        "Step": c["label"],
+                        "Input tokens": f"{c['input_tokens']:,}",
+                        "Output tokens": f"{c['output_tokens']:,}",
+                        "Cost": f"${c['cost']:.5f}",
+                    })
+                # Add total row
+                rows.append({
+                    "Step": "**Total**",
+                    "Input tokens": f"{r.get('input_tokens', 0):,}",
+                    "Output tokens": f"{r.get('output_tokens', 0):,}",
+                    "Cost": f"**${r['total_cost']:.5f}**",
+                })
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+            else:
+                st.caption("No call-level breakdown available for this run.")
+
+
 # ── App Shell ─────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Interview Prep Generator",
@@ -1284,7 +1458,7 @@ st.set_page_config(
 
 st.title("Interview Prep Generator")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Generate Documents", "Analyze Video", "Documents", "Chat", "Mock Interview"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Generate Documents", "Analyze Video", "Documents", "Chat", "Mock Interview", "API Costs"])
 
 with tab1:
     page_generate()
@@ -1300,3 +1474,6 @@ with tab4:
 
 with tab5:
     page_interview()
+
+with tab6:
+    page_costs()
