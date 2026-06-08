@@ -23,16 +23,32 @@ from google import genai
 from google.genai import types
 from cost_tracker import CostTracker
 
-SUPPORTED_MIME = {
+SUPPORTED_VIDEO_MIME = {
     "mp4":  "video/mp4",
-    "mov":  "video/quicktime",
-    "avi":  "video/x-msvideo",
     "mkv":  "video/x-matroska",
     "webm": "video/webm",
-    "flv":  "video/x-flv",
-    "mpeg": "video/mpeg",
-    "mpg":  "video/mpeg",
+    "mov":  "video/quicktime",
+    "avi":  "video/x-msvideo",
+    "m4v":  "video/x-m4v",
 }
+
+SUPPORTED_AUDIO_MIME = {
+    "mp3":  "audio/mpeg",
+    "wav":  "audio/wav",
+    "m4a":  "audio/mp4",
+    "ogg":  "audio/ogg",
+    "flac": "audio/flac",
+    "aac":  "audio/aac",
+    "wma":  "audio/x-ms-wma",
+}
+
+# Combined — used by get_mime() and backwards-compat callers
+SUPPORTED_MIME = {**SUPPORTED_VIDEO_MIME, **SUPPORTED_AUDIO_MIME}
+
+
+def is_audio_file(filename: str) -> bool:
+    """Return True if the filename has a native audio extension."""
+    return filename.rsplit(".", 1)[-1].lower() in SUPPORTED_AUDIO_MIME
 
 DEFAULT_FRAMES_PER_SECOND = 0.1   # 1 frame every 10 seconds
 FRAME_WIDTH               = 640

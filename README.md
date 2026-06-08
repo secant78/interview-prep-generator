@@ -98,6 +98,13 @@ Upload a recorded interview video and get three AI-generated documents. Uses a f
 | 1 frame / 3s ⭐ | Hand gestures — recommended | ~600 |
 | 1 frame / 1s | High-frequency gestures | ~1,800 |
 
+**Audio-only mode** — check *"Audio only (skip visual analysis)"* to skip all frame extraction and visual analysis. Produces the same transcript, speech analysis, performance report (without body language sections), and interview intelligence document at ~60% lower cost and faster turnaround. Ideal when you don't need eye contact or gesture feedback.
+
+| Mode | 30 min cost | 60 min cost |
+|---|---|---|
+| Full video (1 frame/3s) | ~$0.04 | ~$0.07 |
+| Audio only | ~$0.015 | ~$0.024 |
+
 **Performance Report includes:**
 - Overall score and executive summary
 - What you did well vs. what needs improvement (with timestamps)
@@ -107,7 +114,7 @@ Upload a recorded interview video and get three AI-generated documents. Uses a f
 
 **Interview Intelligence document includes:**
 - Detailed interview summary (6-10 sentences covering the full conversation)
-- Every question asked — exact wording, timestamp, type, answer summary, and direct quote
+- Every question asked — exact wording, timestamp, type, answer summary, direct quote, **best answer** (polished 6-10 sentence model answer in first person, built from your strongest points plus what was missing — ready to use as a practice answer), and any follow-up questions
 - All tools & technologies mentioned, organized by category (Cloud, CI/CD, Containers, Languages, DBs, Monitoring, Security)
 - Technical concepts and architectural topics discussed
 - Key stories and examples the interviewee used, with source company context

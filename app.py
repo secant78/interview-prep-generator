@@ -106,12 +106,18 @@ def get_pinecone_index():
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def read_resume(uploaded_file) -> str:
-    if uploaded_file.name.endswith(".pdf"):
+    import io
+    name = uploaded_file.name.lower()
+    if name.endswith(".pdf"):
         from pypdf import PdfReader
-        import io
         reader = PdfReader(io.BytesIO(uploaded_file.read()))
         return "\n".join(p.extract_text() or "" for p in reader.pages)
-    return uploaded_file.read().decode("utf-8")
+    if name.endswith(".docx"):
+        import docx as _docx
+        doc = _docx.Document(io.BytesIO(uploaded_file.read()))
+        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    # .txt, .md, .srt, .vtt and any other text format
+    return uploaded_file.read().decode("utf-8", errors="replace")
 
 
 def slugify(text: str) -> str:
@@ -220,7 +226,7 @@ def page_generate():
     with col2:
         role = st.text_input("Target Role", placeholder="e.g. DevOps Engineer")
 
-    resume_file = st.file_uploader("Upload Resume", type=["txt", "pdf"])
+    resume_file = st.file_uploader("Upload Resume", type=["pdf", "docx", "txt", "md", "srt", "vtt"])
     job_desc = st.text_area("Paste Job Description", height=200)
 
     st.markdown("**Select documents to generate:**")
@@ -527,7 +533,7 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
 # ── Page: Analyze Video ───────────────────────────────────────────────────────
 def page_analyze():
     import tempfile, shutil
-    from analyzer import get_mime, SUPPORTED_MIME
+    from analyzer import get_mime, SUPPORTED_MIME, SUPPORTED_VIDEO_MIME, SUPPORTED_AUDIO_MIME, is_audio_file
 
     st.header("Analyze Interview Video")
 
@@ -564,18 +570,26 @@ def page_analyze():
             key="av_model",
             help="2.0 Flash Lite: cheapest (~$0.01/30min). 2.5 Flash: best value (~$0.02, recommended). 2.5 Pro: highest quality (~$0.05).",
         )
+    # Determine whether the uploaded file is a native audio file
+    _uploaded_is_audio = bool(video_file and is_audio_file(video_file.name))
+
     with col3:
-        frame_rate_label = st.selectbox(
-            "Frame Rate",
-            options=[
-                "1 frame / 10s — posture & presence (cheapest)",
-                "1 frame / 3s — hand gestures (recommended)",
-                "1 frame / 1s — frequent gestures (3× cost)",
-            ],
-            index=1,
-            key="av_frame_rate",
-            help="Higher rates catch more hand gestures but increase cost proportionally. Eye contact detection works well at any rate.",
-        )
+        # Frame Rate is irrelevant for audio files or Tech Prep (audio-only)
+        if _uploaded_is_audio:
+            st.caption("Frame rate N/A — audio file")
+            frame_rate_label = "1 frame / 3s — hand gestures (recommended)"
+        else:
+            frame_rate_label = st.selectbox(
+                "Frame Rate",
+                options=[
+                    "1 frame / 10s — posture & presence (cheapest)",
+                    "1 frame / 3s — hand gestures (recommended)",
+                    "1 frame / 1s — frequent gestures (3× cost)",
+                ],
+                index=1,
+                key="av_frame_rate",
+                help="Higher rates catch more hand gestures but increase cost proportionally. Eye contact detection works well at any rate.",
+            )
     _frame_rate_map = {
         "1 frame / 10s — posture & presence (cheapest)": 0.1,
         "1 frame / 3s — hand gestures (recommended)":   1/3,
@@ -596,15 +610,19 @@ def page_analyze():
             ),
         )
     with col_audio:
-        audio_only = st.checkbox(
-            "🎙️ Audio only (skip visual analysis)",
-            key="av_audio_only",
-            help=(
-                "Skips frame extraction and visual analysis entirely. "
-                "Faster and cheaper — transcription, speech quality, and interview intelligence only. "
-                "Use when you don't need body language / eye contact feedback."
-            ),
-        ) if video_type == "Interview" else False
+        if _uploaded_is_audio or video_type != "Interview":
+            # Audio files are always audio-only; Tech Prep has no visual analysis anyway
+            audio_only = True
+        else:
+            audio_only = st.checkbox(
+                "🎙️ Audio only (skip visual analysis)",
+                key="av_audio_only",
+                help=(
+                    "Skips frame extraction and visual analysis entirely. "
+                    "Faster and cheaper — transcription, speech quality, and interview intelligence only. "
+                    "Use when you don't need body language / eye contact feedback."
+                ),
+            )
 
     col3, col4 = st.columns(2)
     with col3:
@@ -626,12 +644,17 @@ def page_analyze():
     interviewee_name = interviewee_name.strip() or "Candidate"
     interviewer_name = interviewer_name.strip() or ("Interviewer" if video_type == "Interview" else "Host")
 
-    supported_exts = ", ".join(f".{e}" for e in SUPPORTED_MIME)
+    video_exts = " ".join(f".{e}" for e in SUPPORTED_VIDEO_MIME)
+    audio_exts = " ".join(f".{e}" for e in SUPPORTED_AUDIO_MIME)
     video_file = st.file_uploader(
-        f"Upload Interview Video ({supported_exts})",
+        f"Upload File  ·  Video: {video_exts}  ·  Audio: {audio_exts}",
         type=list(SUPPORTED_MIME.keys()),
         key="av_video",
     )
+
+    # Auto-detect audio uploads and surface an info note
+    if video_file and is_audio_file(video_file.name):
+        st.info("🎙️ Audio file detected — visual analysis skipped automatically.")
 
     if video_file:
         size_mb = video_file.size / 1_000_000
