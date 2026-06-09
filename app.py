@@ -28,7 +28,7 @@ PINECONE_INDEX       = "interview-prep"
 CHAT_MODEL           = "gemini-2.5-flash"
 EMBED_MODEL          = "multilingual-e5-large"
 NAMESPACE            = "__default__"
-DEFAULT_OUTPUT_DIR   = Path(r"C:\Users\Sean Cancino\Documents\interview-prep")
+DEFAULT_OUTPUT_DIR   = Path(os.getenv("OUTPUT_DIR", "/app/output"))
 CONFIG_FILE          = Path(__file__).parent / ".app_config.json"
 
 
@@ -121,7 +121,9 @@ def read_resume(uploaded_file) -> str:
 
 
 def slugify(text: str) -> str:
-    return text.replace(" ", "_").replace("/", "-")
+    # Strip characters that are illegal in Windows/Linux filenames and markdown markers.
+    text = re.sub(r'[\\/:*?"<>|]', '', text)
+    return re.sub(r'\s+', '_', text.strip()) or "Unknown"
 
 
 def generate_doc(gemini_client, doc_key: str, resume: str, job_desc: str, company: str = "", role: str = "") -> tuple[str, object]:
@@ -570,8 +572,11 @@ def page_analyze():
             key="av_model",
             help="2.0 Flash Lite: cheapest (~$0.01/30min). 2.5 Flash: best value (~$0.02, recommended). 2.5 Pro: highest quality (~$0.05).",
         )
-    # Determine whether the uploaded file is a native audio file
-    _uploaded_is_audio = bool(video_file and is_audio_file(video_file.name))
+    # Determine whether the currently uploaded file is a native audio file.
+    # Read from session_state (previous rerun value) because the file_uploader
+    # widget hasn't rendered yet at this point in the layout.
+    _prev_upload = st.session_state.get("av_video")
+    _uploaded_is_audio = bool(_prev_upload and hasattr(_prev_upload, "name") and is_audio_file(_prev_upload.name))
 
     with col3:
         # Frame Rate is irrelevant for audio files or Tech Prep (audio-only)
@@ -1402,7 +1407,7 @@ def page_costs():
             row["Month Total"] = f"${mo_total:.4f}"
             rows.append(row)
         if rows:
-            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.dataframe(rows, width='stretch', hide_index=True)
 
     st.divider()
 
@@ -1480,7 +1485,7 @@ def page_costs():
                     "Output tokens": f"{r.get('output_tokens', 0):,}",
                     "Cost": f"**${r['total_cost']:.5f}**",
                 })
-                st.dataframe(rows, use_container_width=True, hide_index=True)
+                st.dataframe(rows, width='stretch', hide_index=True)
             else:
                 st.caption("No call-level breakdown available for this run.")
 

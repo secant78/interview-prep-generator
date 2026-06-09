@@ -46,5 +46,113 @@
       }
     ],
     "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-08T16:29:43.672187",
+    "tab": "Analyze Video",
+    "company": "Key_Health",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.038548,
+    "input_tokens": 46275,
+    "output_tokens": 52678,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 9452,
+        "output_tokens": 11044,
+        "cost": 0.008044
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 11556,
+        "output_tokens": 13131,
+        "cost": 0.009612
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 13575,
+        "output_tokens": 16591,
+        "cost": 0.011991
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 11692,
+        "output_tokens": 11912,
+        "cost": 0.008901
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-09T08:51:49.703835",
+    "tab": "Analyze Video",
+    "company": "Tech_Solutions_Inc.",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.015973,
+    "input_tokens": 21132,
+    "output_tokens": 21338,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 4838,
+        "output_tokens": 5308,
+        "cost": 0.00391
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 5820,
+        "output_tokens": 4075,
+        "cost": 0.003318
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 4519,
+        "output_tokens": 6600,
+        "cost": 0.004638
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 5955,
+        "output_tokens": 5355,
+        "cost": 0.004106
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-09T11:36:13.385133",
+    "tab": "Analyze Video",
+    "company": "[NA]",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.016778,
+    "input_tokens": 31039,
+    "output_tokens": 20203,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 8351,
+        "output_tokens": 9358,
+        "cost": 0.006867
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 9870,
+        "output_tokens": 2369,
+        "cost": 0.002902
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 2813,
+        "output_tokens": 2221,
+        "cost": 0.001755
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 10005,
+        "output_tokens": 6255,
+        "cost": 0.005254
+      }
+    ],
+    "video_type": "Interview"
   }
 ]
