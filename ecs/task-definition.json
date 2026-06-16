@@ -17,7 +17,8 @@
         }
       ],
       "environment": [
-        { "name": "OUTPUT_DIR", "value": "/app/output" }
+        { "name": "OUTPUT_DIR", "value": "/app/output" },
+        { "name": "S3_BUCKET",  "value": "interview-prep-YOUR_ACCOUNT_ID" }
       ],
       "secrets": [
         {

@@ -1,0 +1,23 @@
+# ── AWS ───────────────────────────────────────────────────────────────────────
+aws_region: us-east-1
+aws_account_id: "YOUR_ACCOUNT_ID"       # e.g. 123456789012
+
+# ── EC2 ───────────────────────────────────────────────────────────────────────
+ec2_instance_type: t4g.micro            # ARM — cheapest (~$6/mo). Use t2.micro for free tier.
+ec2_ami: ami-0c7217cdde317cfec          # Amazon Linux 2023 ARM (us-east-1). Update for your region.
+ec2_key_name: interview-prep-key        # Name of the key pair Ansible will create in AWS.
+ec2_instance_name: interview-prep-generator
+
+# ── App ───────────────────────────────────────────────────────────────────────
+app_port: 8501
+ecr_repository: interview-prep-generator
+image_tag: latest                       # Overridden by CI with the git SHA.
+
+# ── S3 ────────────────────────────────────────────────────────────────────────
+s3_bucket: "interview-prep-{{ aws_account_id }}"  # created by configure.yml
+
+# ── SSL (optional) ────────────────────────────────────────────────────────────
+# Set enable_ssl: true and provide a domain to get a free Let's Encrypt cert.
+enable_ssl: false
+domain: ""                              # e.g. myapp.example.com
+certbot_email: ""                       # e.g. you@example.com

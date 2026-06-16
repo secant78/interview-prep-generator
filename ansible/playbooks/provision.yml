@@ -1,0 +1,100 @@
+---
+# Run once from your local machine to create the EC2 instance and supporting
+# AWS resources.
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/provision.yml
+#
+# Requirements:
+#   pip install boto3 botocore
+#   ansible-galaxy collection install amazon.aws
+
+- name: Provision AWS infrastructure
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  tasks:
+    # ── SSH key pair ──────────────────────────────────────────────────────────
+    - name: Create SSH key pair
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        region: "{{ aws_region }}"
+      register: key_pair
+
+    - name: Save private key locally
+      copy:
+        content: "{{ key_pair.key.private_key }}"
+        dest: "~/.ssh/{{ ec2_key_name }}.pem"
+        mode: "0600"
+      when: key_pair.changed
+
+    # ── Security group ────────────────────────────────────────────────────────
+    - name: Create security group
+      amazon.aws.ec2_security_group:
+        name: interview-prep-sg
+        description: Interview Prep Generator
+        region: "{{ aws_region }}"
+        rules:
+          - proto: tcp
+            ports: [22]
+            cidr_ip: 0.0.0.0/0
+            rule_desc: SSH
+          - proto: tcp
+            ports: ["{{ app_port }}"]
+            cidr_ip: 0.0.0.0/0
+            rule_desc: Streamlit app
+          # Uncomment if enabling SSL (nginx on 80/443):
+          # - proto: tcp
+          #   ports: [80, 443]
+          #   cidr_ip: 0.0.0.0/0
+          #   rule_desc: HTTP/HTTPS
+        rules_egress:
+          - proto: all
+            cidr_ip: 0.0.0.0/0
+      register: sg
+
+    # ── EC2 instance ──────────────────────────────────────────────────────────
+    - name: Launch EC2 instance
+      amazon.aws.ec2_instance:
+        name: "{{ ec2_instance_name }}"
+        key_name: "{{ ec2_key_name }}"
+        instance_type: "{{ ec2_instance_type }}"
+        image_id: "{{ ec2_ami }}"
+        region: "{{ aws_region }}"
+        security_groups: [interview-prep-sg]
+        network:
+          assign_public_ip: true
+        tags:
+          Project: interview-prep-generator
+        state: running
+        wait: true
+      register: ec2
+
+    - name: Allocate and associate Elastic IP
+      amazon.aws.ec2_eip:
+        region: "{{ aws_region }}"
+        device_id: "{{ ec2.instances[0].instance_id }}"
+        in_vpc: true
+      register: eip
+
+    - name: Print public IP
+      debug:
+        msg: "EC2 public IP: {{ eip.public_ip }}"
+
+    # ── Update inventory ──────────────────────────────────────────────────────
+    - name: Write IP to inventory
+      copy:
+        content: |
+          [app]
+          {{ eip.public_ip }} ansible_user=ec2-user ansible_ssh_private_key_file=~/.ssh/{{ ec2_key_name }}.pem
+        dest: "{{ playbook_dir }}/../inventory.ini"
+
+    - name: Wait for SSH to be ready
+      wait_for:
+        host: "{{ eip.public_ip }}"
+        port: 22
+        timeout: 120

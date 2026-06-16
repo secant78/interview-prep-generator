@@ -55,6 +55,12 @@ def get_output_dir() -> Path:
     return p
 
 
+def get_typed_output_dir(subfolder: str) -> Path:
+    """Return output_dir/subfolder, unless output_dir already ends with subfolder."""
+    base = get_output_dir()
+    return base if base.name == subfolder else base / subfolder
+
+
 BASE_OUTPUT_DIR = get_output_dir()
 
 DOC_OPTIONS = {
@@ -124,6 +130,37 @@ def slugify(text: str) -> str:
     # Strip characters that are illegal in Windows/Linux filenames and markdown markers.
     text = re.sub(r'[\\/:*?"<>|]', '', text)
     return re.sub(r'\s+', '_', text.strip()) or "Unknown"
+
+
+# ── S3 helpers ────────────────────────────────────────────────────────────────
+_S3_BUCKET = os.getenv("S3_BUCKET")          # unset locally → S3 upload skipped
+_s3_client = None
+
+
+def _get_s3():
+    global _s3_client
+    if _s3_client is None:
+        import boto3
+        _s3_client = boto3.client("s3")
+    return _s3_client
+
+
+def save_and_upload(path: Path, content: str, s3_key: str | None = None) -> None:
+    """Write content to local path, then mirror to S3 if S3_BUCKET is configured."""
+    path.write_text(content, encoding="utf-8")
+    if _S3_BUCKET:
+        key = s3_key or "/".join(path.parts[-3:])   # subfolder/run_dir/filename
+        try:
+            _get_s3().put_object(
+                Bucket=_S3_BUCKET,
+                Key=key,
+                Body=content.encode("utf-8"),
+                ContentType="text/markdown",
+            )
+        except Exception as exc:
+            # Never block the user over a storage failure — log and continue.
+            import traceback
+            print(f"[S3 upload failed] {key}: {exc}\n{traceback.format_exc()}")
 
 
 def generate_doc(gemini_client, doc_key: str, resume: str, job_desc: str, company: str = "", role: str = "") -> tuple[str, object]:
@@ -250,8 +287,7 @@ def page_generate():
         date_str = datetime.now().strftime("%m-%d-%y")
         company_slug = slugify(company)
 
-        # Create a new folder for this run: e.g. 05-30-26_Comcast
-        run_dir = get_output_dir() / f"{date_str}_{company_slug}"
+        run_dir = get_typed_output_dir("prep-docs") / f"{date_str}_{company_slug}"
         run_dir.mkdir(parents=True, exist_ok=True)
         st.session_state.run_dir = str(run_dir)
 
@@ -273,7 +309,7 @@ def page_generate():
 
             filename = f"{date_str}_{company_slug}_{key}.md"
             filepath = run_dir / filename
-            filepath.write_text(full_content, encoding="utf-8")
+            save_and_upload(filepath, full_content)
 
             st.session_state.generated_docs[key] = {
                 "content": full_content,
@@ -409,14 +445,14 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
             if not company_slug:
                 company_slug = "TechPrep"
 
-            run_dir = get_output_dir() / f"{date_str}_{company_slug}"
+            run_dir = get_typed_output_dir("tech-prep") / f"{date_str}_{company_slug}"
             run_dir.mkdir(parents=True, exist_ok=True)
 
             guide_filename      = f"{date_str}_{company_slug}_{video_stem}_tech_prep.md"
             transcript_filename = f"{date_str}_{company_slug}_{video_stem}_transcript.md"
 
-            (run_dir / guide_filename).write_text(study_guide, encoding="utf-8")
-            (run_dir / transcript_filename).write_text(transcript, encoding="utf-8")
+            save_and_upload(run_dir / guide_filename,      study_guide)
+            save_and_upload(run_dir / transcript_filename, transcript)
 
             update_status("Indexing into Pinecone...")
             index = get_pinecone_index()
@@ -473,16 +509,16 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
                         break
                 company_slug = slugify(detected) if detected.lower() != "unknown" else "Unknown"
 
-            run_dir = get_output_dir() / f"{date_str}_{company_slug}"
+            run_dir = get_typed_output_dir("interview") / f"{date_str}_{company_slug}"
             run_dir.mkdir(parents=True, exist_ok=True)
 
             filename            = f"{date_str}_{company_slug}_{video_stem}_analysis.md"
             transcript_filename = f"{date_str}_{company_slug}_{video_stem}_transcript.md"
             intel_filename      = f"{date_str}_{company_slug}_{video_stem}_intel.md"
 
-            (run_dir / filename).write_text(report,      encoding="utf-8")
-            (run_dir / transcript_filename).write_text(transcript, encoding="utf-8")
-            (run_dir / intel_filename).write_text(intel, encoding="utf-8")
+            save_and_upload(run_dir / filename,            report)
+            save_and_upload(run_dir / transcript_filename, transcript)
+            save_and_upload(run_dir / intel_filename,      intel)
 
             update_status("Indexing report, transcript, and intel into Pinecone...")
             index = get_pinecone_index()

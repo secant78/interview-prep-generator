@@ -1,0 +1,51 @@
+---
+# Lightweight deploy playbook — called by GitHub Actions on every push to main.
+# Pulls the new image from ECR and restarts the systemd service.
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/deploy.yml \
+#     -i ansible/inventory.ini \
+#     -e "image_tag=<git-sha>"
+
+- name: Deploy new image
+  hosts: app
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  tasks:
+    - name: Log in to ECR
+      ansible.builtin.shell: |
+        aws ecr get-login-password --region {{ aws_region }} | \
+        docker login --username AWS --password-stdin \
+        {{ aws_account_id }}.dkr.ecr.{{ aws_region }}.amazonaws.com
+      changed_when: false
+
+    - name: Pull new image
+      ansible.builtin.shell: |
+        docker pull {{ aws_account_id }}.dkr.ecr.{{ aws_region }}.amazonaws.com/{{ ecr_repository }}:{{ image_tag }}
+      register: pull_result
+      changed_when: "'Status: Downloaded newer image' in pull_result.stdout"
+
+    - name: Update systemd service with new image tag
+      ansible.builtin.replace:
+        path: /etc/systemd/system/interview-prep.service
+        regexp: '{{ ecr_repository }}:.*$'
+        replace: '{{ ecr_repository }}:{{ image_tag }}'
+
+    - name: Restart app service
+      ansible.builtin.systemd:
+        name: interview-prep
+        daemon_reload: true
+        state: restarted
+
+    - name: Wait for app to be healthy
+      ansible.builtin.uri:
+        url: "http://localhost:{{ app_port }}/_stcore/health"
+        status_code: 200
+      register: health
+      retries: 10
+      delay: 6
+      until: health.status == 200

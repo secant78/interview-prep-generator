@@ -154,5 +154,481 @@
       }
     ],
     "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-10T11:16:29.519213",
+    "tab": "Analyze Video",
+    "company": "NA_-_Not_provided_in_source_documents",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.020802,
+    "input_tokens": 41062,
+    "output_tokens": 24404,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 11123,
+        "output_tokens": 12858,
+        "cost": 0.009383
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 13370,
+        "output_tokens": 2619,
+        "cost": 0.003577
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 3063,
+        "output_tokens": 4399,
+        "cost": 0.003099
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 13506,
+        "output_tokens": 4528,
+        "cost": 0.004743
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-10T14:43:38.500795",
+    "tab": "Analyze Video",
+    "company": "TechPrep",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.009847,
+    "input_tokens": 11432,
+    "output_tokens": 13554,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 5065,
+        "output_tokens": 5443,
+        "cost": 0.004026
+      },
+      {
+        "label": "Study guide generation",
+        "input_tokens": 6367,
+        "output_tokens": 8111,
+        "cost": 0.005822
+      }
+    ],
+    "video_type": "Tech Prep"
+  },
+  {
+    "timestamp": "2026-06-10T14:49:20.830705",
+    "tab": "Analyze Video",
+    "company": "TechPrep",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.007286,
+    "input_tokens": 8620,
+    "output_tokens": 9988,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 3657,
+        "output_tokens": 4041,
+        "cost": 0.002973
+      },
+      {
+        "label": "Study guide generation",
+        "input_tokens": 4963,
+        "output_tokens": 5947,
+        "cost": 0.004313
+      }
+    ],
+    "video_type": "Tech Prep"
+  },
+  {
+    "timestamp": "2026-06-10T14:49:39.286135",
+    "tab": "Analyze Video",
+    "company": "TechPrep",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.023816,
+    "input_tokens": 32428,
+    "output_tokens": 31587,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 14841,
+        "output_tokens": 16664,
+        "cost": 0.012225
+      },
+      {
+        "label": "Study guide generation",
+        "input_tokens": 17587,
+        "output_tokens": 14923,
+        "cost": 0.011592
+      }
+    ],
+    "video_type": "Tech Prep"
+  },
+  {
+    "timestamp": "2026-06-11T00:22:24.308760",
+    "tab": "Analyze Video",
+    "company": "TechPrep",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.011271,
+    "input_tokens": 11729,
+    "output_tokens": 15852,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 5010,
+        "output_tokens": 5795,
+        "cost": 0.004228
+      },
+      {
+        "label": "Study guide generation",
+        "input_tokens": 6719,
+        "output_tokens": 10057,
+        "cost": 0.007042
+      }
+    ],
+    "video_type": "Tech Prep"
+  },
+  {
+    "timestamp": "2026-06-11T00:22:28.781320",
+    "tab": "Analyze Video",
+    "company": "TechPrep",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.013509,
+    "input_tokens": 14286,
+    "output_tokens": 18943,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 6353,
+        "output_tokens": 7010,
+        "cost": 0.005159
+      },
+      {
+        "label": "Study guide generation",
+        "input_tokens": 7933,
+        "output_tokens": 11933,
+        "cost": 0.00835
+      }
+    ],
+    "video_type": "Tech Prep"
+  },
+  {
+    "timestamp": "2026-06-11T00:24:44.401629",
+    "tab": "Analyze Video",
+    "company": "TechPrep",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.014488,
+    "input_tokens": 21687,
+    "output_tokens": 18725,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 9872,
+        "output_tokens": 10892,
+        "cost": 0.008016
+      },
+      {
+        "label": "Study guide generation",
+        "input_tokens": 11815,
+        "output_tokens": 7833,
+        "cost": 0.006472
+      }
+    ],
+    "video_type": "Tech Prep"
+  },
+  {
+    "timestamp": "2026-06-11T10:30:09.702526",
+    "tab": "Analyze Video",
+    "company": "NA_(No_visual_analysis_performed)",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.022454,
+    "input_tokens": 39863,
+    "output_tokens": 27458,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 10876,
+        "output_tokens": 12158,
+        "cost": 0.008926
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 12670,
+        "output_tokens": 3068,
+        "cost": 0.003741
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 3512,
+        "output_tokens": 5429,
+        "cost": 0.003784
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 12805,
+        "output_tokens": 6803,
+        "cost": 0.006003
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-11T18:34:30.873756",
+    "tab": "Generate Documents",
+    "company": "Ameriprise",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.023923,
+    "input_tokens": 34105,
+    "output_tokens": 31345,
+    "calls": [
+      {
+        "label": "The Complete Story",
+        "input_tokens": 6924,
+        "output_tokens": 6887,
+        "cost": 0.005171
+      },
+      {
+        "label": "Interview Prep Playbook",
+        "input_tokens": 6853,
+        "output_tokens": 6563,
+        "cost": 0.004966
+      },
+      {
+        "label": "Mock Interview Q&A",
+        "input_tokens": 6443,
+        "output_tokens": 10663,
+        "cost": 0.007364
+      },
+      {
+        "label": "Profile Narratives",
+        "input_tokens": 6178,
+        "output_tokens": 1670,
+        "cost": 0.001929
+      },
+      {
+        "label": "Tools Narratives",
+        "input_tokens": 6224,
+        "output_tokens": 1730,
+        "cost": 0.001972
+      },
+      {
+        "label": "Company Research",
+        "input_tokens": 1483,
+        "output_tokens": 3832,
+        "cost": 0.002522
+      }
+    ],
+    "doc_keys": [
+      "story",
+      "playbook",
+      "mock_qa",
+      "narratives",
+      "tools",
+      "research"
+    ],
+    "role": "Devops Engineer"
+  },
+  {
+    "timestamp": "2026-06-11T18:50:35.265427",
+    "tab": "Analyze Video",
+    "company": "NA_(Not_provided_in_source_documents)",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.024666,
+    "input_tokens": 43898,
+    "output_tokens": 30136,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 11791,
+        "output_tokens": 13887,
+        "cost": 0.010101
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 14399,
+        "output_tokens": 2730,
+        "cost": 0.003798
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 3174,
+        "output_tokens": 5362,
+        "cost": 0.003693
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 14534,
+        "output_tokens": 8157,
+        "cost": 0.007074
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-12T11:01:34.608586",
+    "tab": "Analyze Video",
+    "company": "[Not_specified_in_source_documents]",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.023505,
+    "input_tokens": 38866,
+    "output_tokens": 29459,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 10713,
+        "output_tokens": 11964,
+        "cost": 0.008785
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 12476,
+        "output_tokens": 2622,
+        "cost": 0.003445
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 3066,
+        "output_tokens": 6944,
+        "cost": 0.004626
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 12611,
+        "output_tokens": 7929,
+        "cost": 0.006649
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-12T11:26:40.574555",
+    "tab": "Analyze Video",
+    "company": "Ameriprise",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.009212,
+    "input_tokens": 11987,
+    "output_tokens": 12356,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 5256,
+        "output_tokens": 5809,
+        "cost": 0.004274
+      },
+      {
+        "label": "Study guide generation",
+        "input_tokens": 6731,
+        "output_tokens": 6547,
+        "cost": 0.004938
+      }
+    ],
+    "video_type": "Tech Prep"
+  },
+  {
+    "timestamp": "2026-06-15T00:55:59.425926",
+    "tab": "Analyze Video",
+    "company": "NA_(Audio-only_analysis)",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.05411,
+    "input_tokens": 26812,
+    "output_tokens": 83480,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 6939,
+        "output_tokens": 7825,
+        "cost": 0.005736
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 8337,
+        "output_tokens": 2620,
+        "cost": 0.002823
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 3064,
+        "output_tokens": 64072,
+        "cost": 0.038903
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 8472,
+        "output_tokens": 8963,
+        "cost": 0.006649
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-15T20:32:30.326669",
+    "tab": "Analyze Video",
+    "company": "TCS",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.029804,
+    "input_tokens": 44797,
+    "output_tokens": 38474,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 12234,
+        "output_tokens": 13575,
+        "cost": 0.00998
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 14087,
+        "output_tokens": 3808,
+        "cost": 0.004398
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 4252,
+        "output_tokens": 6074,
+        "cost": 0.004282
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 14224,
+        "output_tokens": 15017,
+        "cost": 0.011144
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-15T20:43:00.033384",
+    "tab": "Analyze Video",
+    "company": "Apple",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.015378,
+    "input_tokens": 23867,
+    "output_tokens": 19663,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 5963,
+        "output_tokens": 6727,
+        "cost": 0.004931
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 7239,
+        "output_tokens": 2847,
+        "cost": 0.002794
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 3291,
+        "output_tokens": 2598,
+        "cost": 0.002052
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 7374,
+        "output_tokens": 7491,
+        "cost": 0.005601
+      }
+    ],
+    "video_type": "Interview"
   }
 ]

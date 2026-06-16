@@ -1,0 +1,212 @@
+---
+# Run once after provision.yml to configure the EC2 instance.
+# Installs Docker, logs into ECR, sets up the app as a systemd service,
+# and optionally configures SSL via Let's Encrypt.
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/configure.yml -i ansible/inventory.ini
+
+# ── Create S3 bucket (runs locally against AWS, not on the EC2 host) ──────────
+- name: Create S3 bucket for generated files
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  tasks:
+    - name: Create S3 bucket
+      amazon.aws.s3_bucket:
+        name: "{{ s3_bucket }}"
+        region: "{{ aws_region }}"
+        versioning: true          # keeps previous versions of every file
+        tags:
+          Project: interview-prep-generator
+
+    - name: Block all public access
+      amazon.aws.s3_bucket:
+        name: "{{ s3_bucket }}"
+        region: "{{ aws_region }}"
+        public_access:
+          block_public_acls: true
+          block_public_policy: true
+          ignore_public_acls: true
+          restrict_public_buckets: true
+
+    - name: Grant EC2 instance role read/write access to bucket
+      amazon.aws.iam_policy:
+        iam_type: role
+        iam_name: ecsTaskRole       # same role used by the app container
+        policy_name: interview-prep-s3
+        state: present
+        policy_json: |
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+              "Resource": [
+                "arn:aws:s3:::{{ s3_bucket }}",
+                "arn:aws:s3:::{{ s3_bucket }}/*"
+              ]
+            }]
+          }
+
+# ── Configure EC2 instance ────────────────────────────────────────────────────
+- name: Configure EC2 instance
+  hosts: app
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  tasks:
+    # ── OS updates ────────────────────────────────────────────────────────────
+    - name: Update all packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+      when: ansible_os_family == "RedHat"
+
+    - name: Update all packages (Debian/Ubuntu)
+      ansible.builtin.apt:
+        upgrade: dist
+        update_cache: true
+      when: ansible_os_family == "Debian"
+
+    # ── Docker ────────────────────────────────────────────────────────────────
+    - name: Install Docker
+      ansible.builtin.dnf:
+        name: docker
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Install Docker (Debian/Ubuntu)
+      ansible.builtin.apt:
+        name: [docker.io, docker-compose-plugin]
+        state: present
+        update_cache: true
+      when: ansible_os_family == "Debian"
+
+    - name: Start and enable Docker
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Add ec2-user to docker group
+      ansible.builtin.user:
+        name: ec2-user
+        groups: docker
+        append: true
+
+    # ── AWS CLI + ECR login ───────────────────────────────────────────────────
+    - name: Install AWS CLI
+      ansible.builtin.dnf:
+        name: awscli
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Log in to ECR
+      ansible.builtin.shell: |
+        aws ecr get-login-password --region {{ aws_region }} | \
+        docker login --username AWS --password-stdin \
+        {{ aws_account_id }}.dkr.ecr.{{ aws_region }}.amazonaws.com
+      changed_when: false
+
+    # ── App environment ───────────────────────────────────────────────────────
+    - name: Create app directory
+      ansible.builtin.file:
+        path: /opt/interview-prep
+        state: directory
+        owner: ec2-user
+        mode: "0750"
+
+    - name: Copy .env file to server
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../.env"
+        dest: /opt/interview-prep/.env
+        owner: ec2-user
+        mode: "0600"
+
+    # ── Systemd service (auto-restart on crash or reboot) ────────────────────
+    - name: Create systemd service for the app
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/interview-prep.service
+        content: |
+          [Unit]
+          Description=Interview Prep Generator
+          After=docker.service
+          Requires=docker.service
+
+          [Service]
+          Restart=always
+          RestartSec=5
+          ExecStartPre=-/usr/bin/docker stop interview-prep
+          ExecStartPre=-/usr/bin/docker rm interview-prep
+          ExecStart=/usr/bin/docker run --name interview-prep \
+            --env-file /opt/interview-prep/.env \
+            -e OUTPUT_DIR=/app/output \
+            -e S3_BUCKET={{ s3_bucket }} \
+            -p {{ app_port }}:8501 \
+            {{ aws_account_id }}.dkr.ecr.{{ aws_region }}.amazonaws.com/{{ ecr_repository }}:{{ image_tag }}
+          ExecStop=/usr/bin/docker stop interview-prep
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start app service
+      ansible.builtin.systemd:
+        name: interview-prep
+        daemon_reload: true
+        enabled: true
+        state: started
+
+    # ── SSL via Let's Encrypt (optional) ─────────────────────────────────────
+    - name: Install nginx and certbot
+      ansible.builtin.dnf:
+        name: [nginx, certbot, python3-certbot-nginx]
+        state: present
+      when: enable_ssl and domain != ""
+
+    - name: Configure nginx reverse proxy
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/interview-prep.conf
+        content: |
+          server {
+              listen 80;
+              server_name {{ domain }};
+              location / {
+                  proxy_pass http://localhost:{{ app_port }};
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection "upgrade";
+                  proxy_set_header Host $host;
+                  proxy_read_timeout 86400;
+              }
+          }
+      when: enable_ssl and domain != ""
+      notify: Reload nginx
+
+    - name: Obtain Let's Encrypt certificate
+      ansible.builtin.command: >
+        certbot --nginx -d {{ domain }}
+        --non-interactive --agree-tos -m {{ certbot_email }}
+      args:
+        creates: /etc/letsencrypt/live/{{ domain }}/fullchain.pem
+      when: enable_ssl and domain != ""
+
+    - name: Enable and start nginx
+      ansible.builtin.systemd:
+        name: nginx
+        enabled: true
+        state: started
+      when: enable_ssl and domain != ""
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
