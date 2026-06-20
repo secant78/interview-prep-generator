@@ -70,6 +70,7 @@ DOC_OPTIONS = {
     "narratives": "Profile Narratives",
     "tools":      "Tools Narratives",
     "research":   "Company Research",
+    "tech_prep":  "Tech Prep Study Guide",
 }
 
 # Docs that don't require a resume upload
@@ -168,9 +169,12 @@ def generate_doc(gemini_client, doc_key: str, resume: str, job_desc: str, compan
     from generators import (
         generate_story, generate_playbook, generate_mock_qa,
         generate_narratives, generate_tools, generate_research,
+        generate_tech_prep,
     )
     if doc_key == "research":
         return generate_research(gemini_client, company, role, job_desc)
+    if doc_key == "tech_prep":
+        return generate_tech_prep(gemini_client, resume, job_desc, company, role)
     fn_map = {
         "story":      generate_story,
         "playbook":   generate_playbook,
@@ -259,11 +263,13 @@ def rag_answer(index, gemini_client, query: str, filters: dict) -> str:
 def page_generate():
     st.header("Generate Interview Prep Documents")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         company = st.text_input("Target Company", placeholder="e.g. Comcast")
     with col2:
         role = st.text_input("Target Role", placeholder="e.g. DevOps Engineer")
+    with col3:
+        interview_date = st.date_input("Interview Date", value=datetime.now())
 
     resume_file = st.file_uploader("Upload Resume", type=["pdf", "docx", "txt", "md", "srt", "vtt"])
     job_desc = st.text_area("Paste Job Description", height=200)
@@ -284,7 +290,7 @@ def page_generate():
     if st.button("Generate", type="primary", disabled=not ready):
         gemini = get_gemini()
         resume_text = read_resume(resume_file) if resume_file else ""
-        date_str = datetime.now().strftime("%m-%d-%y")
+        date_str = interview_date.strftime("%m-%d-%y")
         company_slug = slugify(company)
 
         run_dir = get_typed_output_dir("prep-docs") / f"{date_str}_{company_slug}"
@@ -421,9 +427,12 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
     try:
         from analyzer import analyze_video, analyze_tech_prep
 
-        date_str    = datetime.now().strftime("%m-%d-%y")
         company_slug = slugify(company) if company else None
         video_stem  = video_filename.rsplit(".", 1)[0]
+        # Use the date from the video filename (e.g. "6-17-26 Session Name") so
+        # the folder reflects the interview date, not the document creation date.
+        _date_match = re.match(r"(\d{1,2}-\d{1,2}-\d{2,4})", video_stem)
+        date_str = _date_match.group(1) if _date_match else datetime.now().strftime("%m-%d-%y")
 
         if video_type == "Tech Prep":
             # ── Tech Prep flow ────────────────────────────────────────────────

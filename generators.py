@@ -8,6 +8,7 @@ from prompts import (
     NARRATIVES_PROMPT,
     TOOLS_PROMPT,
     RESEARCH_PROMPT,
+    TECH_PREP_PROMPT,
 )
 
 MODEL = "gemini-2.5-flash"
@@ -45,6 +46,10 @@ def generate_narratives(client: genai.Client, resume: str, job_desc: str):
 
 def generate_tools(client: genai.Client, resume: str, job_desc: str):
     return _call(client, TOOLS_PROMPT.format(resume=resume, job_desc=job_desc))
+
+
+def generate_tech_prep(client: genai.Client, resume: str, job_desc: str, company: str, role: str):
+    return _call(client, TECH_PREP_PROMPT.format(resume=resume, job_desc=job_desc, company=company, role=role))
 
 
 def generate_research(client: genai.Client, company: str, role: str, job_desc: str):

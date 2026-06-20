@@ -537,3 +537,135 @@ Prepared: [Current Month Year]
 ---
 
 End of Company Intelligence Report     Prepared: [Month Year]"""
+
+
+# ---------------------------------------------------------------------------
+# Document 7: Tech Prep Study Guide
+# ---------------------------------------------------------------------------
+
+TECH_PREP_PROMPT = """Using the resume and job description below, write a TECH PREP STUDY GUIDE — a structured interview coaching document that predicts the technical questions the interviewer will ask, provides recommended answers the candidate can use verbatim, and identifies the concepts and stories they need to master.
+
+RESUME:
+{resume}
+
+JOB DESCRIPTION:
+{job_desc}
+
+COMPANY: {company}
+ROLE: {role}
+
+---
+
+CRITICAL FORMATTING RULES:
+- Every section header must be on its own line with # ## or ###
+- Every bullet point must start on its own line with -
+- Always put a blank line before and after bullet lists and headers
+- Never run separate items together on the same line
+- Bold uses **double asterisks**
+- Use --- on its own line between major sections
+
+Generate the full document following this EXACT structure:
+
+# Tech Prep Study Guide
+**Company:** {company}
+**Role:** {role}
+**Candidate:** [Full name from resume]
+**Prepared:** [Current month and year]
+
+---
+
+## Session Overview
+[3-4 sentences summarizing what this role demands technically, what the candidate's strongest relevant experience is, and what areas need the most preparation. Be specific — name the technologies, the gaps, and the focus areas.]
+
+---
+
+## Technical Questions Covered
+
+[Generate 10-15 technical questions that are highly likely to be asked for this specific role based on the JD. For EACH question follow this exact format:]
+
+### Q: "[The interview question — make it specific to this role and company context, not generic]"
+
+**Recommended Answer:**
+"[Write a complete, first-person answer the candidate can rehearse and use verbatim. 6-12 sentences. Reference the candidate's actual experience from the resume where relevant — name real companies, real tools, real outcomes. Be specific and operational. No filler phrases like 'great question' or 'I believe'.]"
+
+**Key points to hit:**
+- [Critical sub-point the answer must include]
+- [Critical sub-point]
+- [Critical sub-point]
+- [Critical sub-point]
+
+---
+
+[Repeat for all 10-15 questions. Group behavioural questions at the end.]
+
+---
+
+## Technical Concepts to Master
+
+[For each major technical concept required by the JD, write an entry. Include concepts the candidate shows on their resume AND concepts from the JD they may need to brush up on. For each:]
+
+### [Concept Name]
+**What it is:** [1-2 sentence definition — clear and plain English]
+**Why it matters for this interview:** [1-2 sentences connecting it to this specific role and JD]
+**What you should be able to say about it:**
+- [Specific talking point grounded in their resume experience, or what to study if it's a gap]
+- [Specific talking point]
+- [Specific talking point]
+**Depth required:** [One of: Surface / Working knowledge / Deep dive]
+
+---
+
+[Cover 8-15 concepts. Prioritize the ones that appear most prominently in the JD.]
+
+---
+
+## Stories & Narratives to Prepare
+
+[Generate 3-5 STAR-format story prompts the candidate should prepare, drawn from their resume and tailored to what this role will likely ask about. For each:]
+
+### Story: "[Memorable title for this story]"
+**Answers this question type:** "[The kind of question this story answers — e.g. 'Tell me about a time you...' or 'Walk me through how you...']"
+**Situation:** [1-2 sentences — what was the context or problem from their actual resume experience]
+**Task:** [1 sentence — their specific responsibility]
+**Action:** [3-5 bullet points — specific technical actions they took, naming real tools and decisions]
+**Result:** [1-2 sentences — quantified outcome where possible]
+**From the resume:** [Point to the specific job/project this story should draw from]
+
+---
+
+## Topics to Study Deeper
+
+[Identify 3-5 areas where the JD requires expertise that appears limited or absent on the resume. For each:]
+
+### [Topic]
+**Why it came up:** [1 sentence explaining why this topic matters for this specific role]
+**What to study:**
+- [Specific sub-topic or concept to learn]
+- [Specific sub-topic]
+- [Specific sub-topic]
+**Target depth:** [One of: Be able to define it / Be able to explain the architecture / Be able to walk through an implementation]
+
+---
+
+## Action Items Before the Interview
+
+[Numbered list of 5-8 concrete, prioritized tasks the candidate should complete before the interview. Be specific — not "review Kubernetes" but "Review how HPA works and be able to explain the difference between CPU-based and custom-metric scaling."]
+
+1. [Specific action item]
+2. [Specific action item]
+[Continue...]
+
+---
+
+## Key Phrases & Talking Points
+
+[5-8 specific phrases or framings the candidate should use in their answers for this role. These are the lines that will make them sound senior and prepared. Quote them directly in quotes.]
+
+- "[Phrase or talking point]"
+- "[Phrase or talking point]"
+[Continue...]
+
+---
+
+*Generated by Interview Prep Generator — Tech Prep Study Guide*
+*{company} | {role} | [Current Month Year]*"""
