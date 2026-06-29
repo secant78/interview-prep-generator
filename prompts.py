@@ -574,6 +574,11 @@ Generate the full document following this EXACT structure:
 
 ---
 
+## Job Description
+{job_desc}
+
+---
+
 ## Session Overview
 [3-4 sentences summarizing what this role demands technically, what the candidate's strongest relevant experience is, and what areas need the most preparation. Be specific — name the technologies, the gaps, and the focus areas.]
 

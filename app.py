@@ -127,10 +127,27 @@ def read_resume(uploaded_file) -> str:
     return uploaded_file.read().decode("utf-8", errors="replace")
 
 
-def slugify(text: str) -> str:
+def slugify(text: str, max_len: int = 60) -> str:
     # Strip characters that are illegal in Windows/Linux filenames and markdown markers.
     text = re.sub(r'[\\/:*?"<>|]', '', text)
-    return re.sub(r'\s+', '_', text.strip()) or "Unknown"
+    text = re.sub(r'\s+', '_', text.strip()) or "Unknown"
+    if len(text) > max_len:
+        text = text[:max_len].rsplit('_', 1)[0]
+    return text
+
+
+_BAD_COMPANY_NAMES = {"unknown", "n/a", "na", "[na]", "not specified", "not provided", "not available"}
+
+def _extract_company(text: str) -> str | None:
+    """Extract a clean company name from a **Company:** line in generated markdown."""
+    for line in text.splitlines():
+        if line.startswith("**Company:**"):
+            raw = line.split("**Company:**", 1)[-1].strip()
+            raw = re.sub(r'\s*\(.*', '', raw).strip()  # strip parenthetical qualifiers
+            raw = re.sub(r'[\[\]]', '', raw).strip()    # strip brackets
+            if raw and raw.lower() not in _BAD_COMPANY_NAMES and len(raw) <= 50:
+                return raw
+    return None
 
 
 # ── S3 helpers ────────────────────────────────────────────────────────────────
@@ -414,7 +431,7 @@ def page_chat():
 
 
 # ── Video analysis background worker ─────────────────────────────────────────
-def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choice, company, interviewee_name, interviewer_name, video_type, frames_per_second: float = 0.1, audio_only: bool = False):
+def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choice, company, interviewee_name, interviewer_name, video_type, frames_per_second: float = 0.1, audio_only: bool = False, output_files: dict | None = None, extract_code: bool = False):
     """
     Runs in a background thread. Writes progress + results into `job` dict
     (a plain Python dict, safe to write from any thread).
@@ -429,10 +446,8 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
 
         company_slug = slugify(company) if company else None
         video_stem  = video_filename.rsplit(".", 1)[0]
-        # Use the date from the video filename (e.g. "6-17-26 Session Name") so
-        # the folder reflects the interview date, not the document creation date.
-        _date_match = re.match(r"(\d{1,2}-\d{1,2}-\d{2,4})", video_stem)
-        date_str = _date_match.group(1) if _date_match else datetime.now().strftime("%m-%d-%y")
+        folder_name = slugify(video_stem)
+        date_str = datetime.now().strftime("%m-%d-%y")
 
         if video_type == "Tech Prep":
             # ── Tech Prep flow ────────────────────────────────────────────────
@@ -445,6 +460,7 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
                 status_callback=update_status,
                 interviewee_name=interviewee_name,
                 interviewer_name=interviewer_name,
+                extract_code=extract_code,
             )
             try:
                 os.unlink(tmp_path)
@@ -452,13 +468,21 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
                 pass
 
             if not company_slug:
-                company_slug = "TechPrep"
+                for source in [study_guide, transcript]:
+                    if source:
+                        name = _extract_company(source)
+                        if name:
+                            company_slug = slugify(name)
+                            break
+                if not company_slug:
+                    company_slug = "TechPrep"
 
-            run_dir = get_typed_output_dir("tech-prep") / f"{date_str}_{company_slug}"
+            named_folder = f"{date_str}_{company_slug}"
+            run_dir = get_typed_output_dir("tech-prep") / named_folder
             run_dir.mkdir(parents=True, exist_ok=True)
 
-            guide_filename      = f"{date_str}_{company_slug}_{video_stem}_tech_prep.md"
-            transcript_filename = f"{date_str}_{company_slug}_{video_stem}_transcript.md"
+            guide_filename      = f"{named_folder}_{folder_name}_tech_prep.md"
+            transcript_filename = f"{named_folder}_{folder_name}_transcript.md"
 
             save_and_upload(run_dir / guide_filename,      study_guide)
             save_and_upload(run_dir / transcript_filename, transcript)
@@ -493,6 +517,7 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
 
         else:
             # ── Interview flow ────────────────────────────────────────────────
+            _of = output_files or {"transcript": True, "analysis": True, "intel": True}
             update_status("Starting interview analysis...")
             report, transcript, intel, cost_tracker = analyze_video(
                 client=gemini,
@@ -504,46 +529,103 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
                 interviewer_name=interviewer_name,
                 frames_per_second=frames_per_second,
                 audio_only=audio_only,
+                output_files=_of,
             )
+
+            # ── Code extraction (optional) ───────────────────────────────────
+            extracted_code = ""
+            if extract_code:
+                from analyzer import extract_code_frames, extract_code_from_frames
+                import av as _av
+
+                update_status("Scanning video frames for on-screen code...")
+                has_video_stream = False
+                try:
+                    with _av.open(tmp_path) as container:
+                        has_video_stream = bool(container.streams.video)
+                except Exception:
+                    pass
+
+                if has_video_stream:
+                    code_frames = extract_code_frames(tmp_path, frames_per_second=0.1)
+                    if code_frames:
+                        update_status(f"Found {len(code_frames)} unique code frame(s) — extracting code...")
+                        extracted_code, code_resp = extract_code_from_frames(
+                            gemini, model_choice, code_frames
+                        )
+                        cost_tracker.add(f"Code extraction ({len(code_frames)} frames)", code_resp)
+                        cost_tracker.add_image_tokens(
+                            f"Code frames ({len(code_frames)} images)", len(code_frames)
+                        )
+                    else:
+                        update_status("No code frames detected in the video.")
+                else:
+                    update_status("No video stream found — skipping code extraction.")
+
             try:
                 os.unlink(tmp_path)
             except Exception:
                 pass
 
             if not company_slug:
-                detected = "Unknown"
-                for line in report.splitlines():
-                    if line.startswith("**Company:**"):
-                        detected = line.split("**Company:**", 1)[-1].strip()
-                        break
-                company_slug = slugify(detected) if detected.lower() != "unknown" else "Unknown"
+                for source in [intel, report, transcript]:
+                    if source:
+                        name = _extract_company(source)
+                        if name:
+                            company_slug = slugify(name)
+                            break
+                if not company_slug:
+                    company_slug = "Unknown"
 
-            run_dir = get_typed_output_dir("interview") / f"{date_str}_{company_slug}"
+            # Build folder name with detected company: date_company_videostem
+            named_folder = f"{date_str}_{company_slug}"
+            run_dir = get_typed_output_dir("interview") / named_folder
             run_dir.mkdir(parents=True, exist_ok=True)
 
-            filename            = f"{date_str}_{company_slug}_{video_stem}_analysis.md"
-            transcript_filename = f"{date_str}_{company_slug}_{video_stem}_transcript.md"
-            intel_filename      = f"{date_str}_{company_slug}_{video_stem}_intel.md"
+            filename            = f"{named_folder}_{folder_name}_analysis.md"
+            transcript_filename = f"{named_folder}_{folder_name}_transcript.md"
+            intel_filename      = f"{named_folder}_{folder_name}_intel.md"
+            code_filename       = f"{named_folder}_{folder_name}_code.md"
 
-            save_and_upload(run_dir / filename,            report)
-            save_and_upload(run_dir / transcript_filename, transcript)
-            save_and_upload(run_dir / intel_filename,      intel)
+            if _of.get("analysis") and report:
+                save_and_upload(run_dir / filename, report)
+            if _of.get("transcript") and transcript:
+                save_and_upload(run_dir / transcript_filename, transcript)
+            if _of.get("intel") and intel:
+                save_and_upload(run_dir / intel_filename, intel)
+            if extracted_code and extracted_code.strip():
+                code_doc = (
+                    "# Extracted Screen Code\n"
+                    f"**Date:** {datetime.now().strftime('%B %d, %Y')}\n"
+                    f"**Source:** {video_filename}\n\n---\n\n"
+                    + extracted_code
+                )
+                save_and_upload(run_dir / code_filename, code_doc)
 
-            update_status("Indexing report, transcript, and intel into Pinecone...")
+            update_status("Indexing into Pinecone...")
             index = get_pinecone_index()
-            base_meta      = {"company": company_slug, "date": date_str}
-            report_count   = ingest_doc(index, gemini, report,      {**base_meta, "doc_type": "video_analysis"})
-            transcript_count = ingest_doc(index, gemini, transcript, {**base_meta, "doc_type": "video_transcript"})
-            intel_count    = ingest_doc(index, gemini, intel,        {**base_meta, "doc_type": "video_intel"})
+            base_meta    = {"company": company_slug, "date": date_str}
+            total_chunks = 0
+            if _of.get("analysis") and report:
+                total_chunks += ingest_doc(index, gemini, report, {**base_meta, "doc_type": "video_analysis"})
+            if _of.get("transcript") and transcript:
+                total_chunks += ingest_doc(index, gemini, transcript, {**base_meta, "doc_type": "video_transcript"})
+            if _of.get("intel") and intel:
+                total_chunks += ingest_doc(index, gemini, intel, {**base_meta, "doc_type": "video_intel"})
+            if extracted_code and extracted_code.strip():
+                total_chunks += ingest_doc(index, gemini, code_doc, {**base_meta, "doc_type": "video_code"})
 
             job["result"] = {
                 "video_type": "Interview",
-                "content": report,
+                "output_files": _of,
+                "content": report or "",
                 "filename": filename,
-                "transcript": transcript,
+                "transcript": transcript or "",
                 "transcript_filename": transcript_filename,
-                "intel": intel,
+                "intel": intel or "",
                 "intel_filename": intel_filename,
+                "extracted_code": code_doc if (extracted_code and extracted_code.strip()) else "",
+                "code_filename": code_filename,
                 "company": company_slug,
                 "doc_type": "video_analysis",
                 "date": date_str,
@@ -551,7 +633,7 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
             }
             job["status"] = (
                 f"Done! Saved to {run_dir} and indexed "
-                f"({report_count + transcript_count + intel_count} chunks) — ask questions in the Chat tab."
+                f"({total_chunks} chunks) — ask questions in the Chat tab."
             )
             job["cost_summary"] = cost_tracker.summary()
             job["cost_total"]   = cost_tracker.total_cost
@@ -661,7 +743,6 @@ def page_analyze():
         )
     with col_audio:
         if _uploaded_is_audio or video_type != "Interview":
-            # Audio files are always audio-only; Tech Prep has no visual analysis anyway
             audio_only = True
         else:
             audio_only = st.checkbox(
@@ -673,6 +754,41 @@ def page_analyze():
                     "Use when you don't need body language / eye contact feedback."
                 ),
             )
+
+    # ── Extract screen code ─────────────────────────────────────────────────
+    if not _uploaded_is_audio:
+        extract_code = st.checkbox(
+            "Extract screen code",
+            value=False,
+            key="av_extract_code",
+            help=(
+                "Scans video frames for code visible on screen (IDE, terminal, notebook). "
+                "Only frames that look like code are sent to the API — typically 5-15 frames "
+                "instead of hundreds, costing ~$0.01-0.02 extra. "
+                "Audio-only files are not supported."
+            ),
+        )
+    else:
+        extract_code = False
+
+    # ── Output file selection (Interview only) ─────────────────────────────────
+    if video_type == "Interview":
+        st.markdown("**Output files to generate:**")
+        out_cols = st.columns(3)
+        with out_cols[0]:
+            out_transcript = st.checkbox("Transcript", value=True, key="av_out_transcript",
+                                         help="Timestamped speaker-labeled transcript of the full interview.")
+        with out_cols[1]:
+            out_analysis = st.checkbox("Performance Report", value=True, key="av_out_analysis",
+                                       help="Detailed feedback on body language, speech, and answer quality.")
+        with out_cols[2]:
+            out_intel = st.checkbox("Interview Intelligence", value=True, key="av_out_intel",
+                                    help="Q&A breakdown with answer summaries, best answers, and follow-up questions.")
+        if not out_transcript and not out_analysis and not out_intel:
+            st.warning("Select at least one output file.")
+        output_files = {"transcript": out_transcript, "analysis": out_analysis, "intel": out_intel}
+    else:
+        output_files = {"transcript": True, "analysis": False, "intel": False}
 
     col3, col4 = st.columns(2)
     with col3:
@@ -716,7 +832,8 @@ def page_analyze():
     job = st.session_state.get("av_job", {})
     job_state = job.get("state", "idle")
 
-    ready = video_file is not None and job_state != "running"
+    has_output_selected = any(output_files.values())
+    ready = video_file is not None and job_state != "running" and has_output_selected
 
     MAX_MINUTES = 60
 
@@ -752,7 +869,7 @@ def page_analyze():
             gemini = get_gemini()
             thread = threading.Thread(
                 target=_run_analysis_thread,
-                args=(new_job, gemini, tmp.name, video_file.name, model_choice, company, interviewee_name, interviewer_name, video_type, frames_per_second, audio_only),
+                args=(new_job, gemini, tmp.name, video_file.name, model_choice, company, interviewee_name, interviewer_name, video_type, frames_per_second, audio_only, output_files, extract_code),
                 daemon=True,
             )
             thread.start()
@@ -847,39 +964,46 @@ def page_analyze():
 
         else:
             # ── Interview results ─────────────────────────────────────────────
-            col_r, col_t, col_i = st.columns(3)
-            with col_r:
-                st.download_button(
-                    label="Download Report (.md)",
-                    data=doc["content"],
-                    file_name=doc["filename"],
-                    mime="text/markdown",
-                    key="av_download",
-                )
-            with col_t:
-                st.download_button(
-                    label="Download Transcript (.md)",
-                    data=doc.get("transcript", ""),
-                    file_name=doc.get("transcript_filename", "transcript.md"),
-                    mime="text/markdown",
-                    key="av_download_transcript",
-                )
-            with col_i:
-                st.download_button(
-                    label="Download Intel (.md)",
-                    data=doc.get("intel", ""),
-                    file_name=doc.get("intel_filename", "intel.md"),
-                    mime="text/markdown",
-                    key="av_download_intel",
-                )
+            _of = doc.get("output_files", {"transcript": True, "analysis": True, "intel": True})
 
-            tab_report, tab_intel, tab_transcript = st.tabs(["Performance Report", "Interview Intelligence", "Transcript"])
-            with tab_report:
-                st.markdown(doc["content"])
-            with tab_intel:
-                st.markdown(doc.get("intel", ""))
-            with tab_transcript:
-                st.markdown(doc.get("transcript", ""))
+            dl_buttons = []
+            if _of.get("analysis") and doc.get("content"):
+                dl_buttons.append(("analysis", "Download Report (.md)", doc["content"], doc["filename"]))
+            if _of.get("transcript") and doc.get("transcript"):
+                dl_buttons.append(("transcript", "Download Transcript (.md)", doc["transcript"], doc.get("transcript_filename", "transcript.md")))
+            if _of.get("intel") and doc.get("intel"):
+                dl_buttons.append(("intel", "Download Intel (.md)", doc["intel"], doc.get("intel_filename", "intel.md")))
+            if doc.get("extracted_code"):
+                dl_buttons.append(("code", "Download Code (.md)", doc["extracted_code"], doc.get("code_filename", "code.md")))
+
+            if dl_buttons:
+                cols = st.columns(len(dl_buttons))
+                for col, (key, label, data, fname) in zip(cols, dl_buttons):
+                    with col:
+                        st.download_button(
+                            label=label, data=data, file_name=fname,
+                            mime="text/markdown", key=f"av_download_{key}",
+                        )
+
+            tab_names, tab_contents = [], []
+            if _of.get("analysis") and doc.get("content"):
+                tab_names.append("Performance Report")
+                tab_contents.append(doc["content"])
+            if _of.get("intel") and doc.get("intel"):
+                tab_names.append("Interview Intelligence")
+                tab_contents.append(doc["intel"])
+            if _of.get("transcript") and doc.get("transcript"):
+                tab_names.append("Transcript")
+                tab_contents.append(doc["transcript"])
+            if doc.get("extracted_code"):
+                tab_names.append("Extracted Code")
+                tab_contents.append(doc["extracted_code"])
+
+            if tab_names:
+                tabs = st.tabs(tab_names)
+                for tab, content in zip(tabs, tab_contents):
+                    with tab:
+                        st.markdown(content)
 
 
 # ── Pinecone indexed-doc lookup ───────────────────────────────────────────────
@@ -956,13 +1080,14 @@ def page_documents():
     # All known doc types — checked as exact suffixes against the filename stem
     _ALL_DOCTYPES = [
         "mock_qa", "tech_prep",          # multi-word first (longer match wins)
-        "video_analysis", "video_intel", "video_transcript",
+        "video_analysis", "video_intel", "video_transcript", "video_code",
         "story", "playbook", "narratives", "tools", "research",
-        "analysis", "intel", "transcript",  # short video suffixes as fallback
+        "analysis", "intel", "transcript", "code",  # short video suffixes as fallback
     ]
     _SHORT_TO_FULL = {
         "analysis":   "video_analysis",
         "intel":      "video_intel",
+        "code":       "video_code",
         "transcript": "video_transcript",
     }
 

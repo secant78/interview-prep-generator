@@ -82,6 +82,155 @@ def extract_frames(video_path: str, frames_per_second: float = DEFAULT_FRAMES_PE
     return frames
 
 
+# ── Code frame detection ─────────────────────────────────────────────────────
+
+def _is_code_frame(img) -> bool:
+    """
+    Heuristic check: does this PIL Image likely show code on screen?
+    Detects dark-background IDEs/terminals and light-background code editors.
+    """
+    from PIL import ImageStat, ImageFilter
+
+    gray = img.convert("L")
+    stat = ImageStat.Stat(gray)
+    mean_brightness = stat.mean[0]
+    std_brightness = stat.stddev[0]
+
+    # High contrast text on a background (dark or light theme)
+    has_text_contrast = std_brightness > 35
+
+    # Edge density — code has many sharp horizontal edges (lines of text)
+    edges = gray.filter(ImageFilter.FIND_EDGES)
+    edge_stat = ImageStat.Stat(edges)
+    edge_density = edge_stat.mean[0]
+    has_dense_edges = edge_density > 12
+
+    # Dark theme: dark bg + contrast + edges
+    if mean_brightness < 90 and has_text_contrast and has_dense_edges:
+        return True
+
+    # Light theme: bright bg + high contrast + dense edges
+    if mean_brightness > 160 and has_text_contrast and edge_density > 15:
+        return True
+
+    return False
+
+
+def _frames_are_similar(img_a, img_b, threshold: float = 0.95) -> bool:
+    """Fast similarity check between two PIL Images using downsampled pixel comparison."""
+    import numpy as np
+
+    size = (32, 32)
+    a = np.array(img_a.convert("L").resize(size), dtype=float)
+    b = np.array(img_b.convert("L").resize(size), dtype=float)
+
+    diff = np.abs(a - b).mean()
+    similarity = 1.0 - (diff / 255.0)
+    return similarity > threshold
+
+
+def extract_code_frames(video_path: str, frames_per_second: float = 0.1) -> list[dict]:
+    """
+    Extract frames that likely contain code visible on screen.
+    Returns list of {"timestamp": float, "data_uri": str} for unique code frames.
+    """
+    from PIL import Image
+
+    interval = 1.0 / frames_per_second
+    candidates = []
+
+    with av.open(video_path) as container:
+        stream = container.streams.video[0]
+        next_t = 0.0
+        for frame in container.decode(stream):
+            t = float(frame.pts * stream.time_base)
+            if t < next_t:
+                continue
+            img = frame.to_image().resize((FRAME_WIDTH, FRAME_HEIGHT))
+            if _is_code_frame(img):
+                candidates.append({"timestamp": t, "image": img})
+            next_t = t + interval
+
+    if not candidates:
+        return []
+
+    # Deduplicate consecutive similar frames
+    unique = [candidates[0]]
+    for c in candidates[1:]:
+        if not _frames_are_similar(c["image"], unique[-1]["image"]):
+            unique.append(c)
+
+    # Convert to data URIs
+    results = []
+    for c in unique:
+        buf = BytesIO()
+        c["image"].save(buf, format="JPEG", quality=80)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        minutes = int(c["timestamp"] // 60)
+        seconds = int(c["timestamp"] % 60)
+        results.append({
+            "timestamp": c["timestamp"],
+            "timestamp_str": f"{minutes:02d}:{seconds:02d}",
+            "data_uri": f"data:image/jpeg;base64,{b64}",
+        })
+
+    return results
+
+
+def extract_code_from_frames(client, model: str, code_frames: list[dict], log=None) -> str:
+    """Send code frames to Gemini and extract all visible code."""
+    if not code_frames:
+        return ""
+
+    image_parts = []
+    for cf in code_frames:
+        b64 = cf["data_uri"].split(",", 1)[1]
+        image_parts.append(types.Part.from_bytes(
+            data=base64.b64decode(b64),
+            mime_type="image/jpeg",
+        ))
+        image_parts.append(f"[Screenshot at {cf['timestamp_str']}]")
+
+    prompt = """\
+You are a code extraction expert. The images above are screenshots from a tech prep / \
+study session video, captured at the timestamps shown. Each screenshot shows code visible \
+on screen (IDE, terminal, notebook, whiteboard, or shared screen).
+
+For EACH distinct piece of code visible across all screenshots:
+
+### [Descriptive title — what the code does]
+**Timestamp:** [when it appeared]
+**Language:** [Python/SQL/Java/Spark/etc.]
+**Context:** [What was being discussed — coding question, demo, walkthrough, etc.]
+
+```[language]
+[Extract the COMPLETE code exactly as shown on screen. If partially visible across \
+multiple frames, combine them into the full version. Preserve formatting, variable names, \
+and comments. If something is cut off or illegible, mark it with [illegible] but include \
+everything you can read.]
+```
+
+**Key points:**
+- [What this code demonstrates or solves]
+- [Any gotchas, edge cases, or important details visible]
+
+Rules:
+- Extract EVERY distinct code snippet visible — do not skip any
+- If the same code appears across multiple frames, combine into one entry
+- Include SQL queries, shell commands, config files — anything that is code
+- If no actual code is visible in a frame (just UI/slides), skip that frame
+- Output nothing if no code is found in any frame"""
+
+    response = client.models.generate_content(
+        model=model,
+        contents=image_parts + [prompt],
+        config=types.GenerateContentConfig(
+            temperature=0.1, max_output_tokens=65535,
+        ),
+    )
+    return response.text, response
+
+
 def extract_audio(video_path: str) -> tuple[str | None, str | None]:
     """
     Extract audio track to a temp mp3 file at 32kbps (stays under Groq's 25MB limit
@@ -296,6 +445,41 @@ Produce this section in Markdown:
 **Company:** [detected company name, or "Unknown"]
 **Interview type:** [Behavioral / Technical / Coding / General — infer from visual context]
 
+### Screen Content & Code Extraction
+*(If any frames show a screen share, IDE, code editor, terminal, whiteboard, or browser with code/problems — extract everything visible. If no screen content is visible in any frame, write "No screen share detected." and skip to Body Language.)*
+
+#### Coding Environment
+- **Platform detected:** [LeetCode / HackerRank / CoderPad / VS Code / IntelliJ / terminal / whiteboard / other — or "None"]
+- **Language:** [detected programming language]
+
+#### Problem Statement
+[If a coding problem is visible on screen (e.g. LeetCode problem, HackerRank prompt, shared doc with problem description), transcribe the COMPLETE problem statement exactly as shown — title, description, constraints, examples, everything visible. If the problem appears across multiple frames, combine all visible portions into one complete statement.]
+
+#### Code on Screen
+[For EVERY frame that shows code, extract the complete code exactly as written — preserve indentation, variable names, function signatures, comments, everything. If the code evolves across frames, show the progression:]
+
+**Frame ~[timestamp]:**
+```[language]
+[exact code visible in this frame]
+```
+
+**Frame ~[timestamp] (updated):**
+```[language]
+[exact code visible in this frame]
+```
+
+[Continue for every frame showing code changes]
+
+#### Final Code State
+```[language]
+[The most complete/final version of the code visible across all frames]
+```
+
+#### Other Screen Content
+[Any other visible content: terminal output, test results, error messages, browser tabs, documentation, diagrams, whiteboard drawings. Transcribe everything readable.]
+
+---
+
 ### Body Language & Posture
 **Score: X/10**
 - Posture: [upright / slouched / mixed — with frame timestamps or approximate times]
@@ -391,14 +575,18 @@ For each interview question asked:
 - Were they concise or did they over-explain?
 - Did they recover well from stumbles?
 
-### 4. Coding Interview (only if this is a coding interview — skip entirely otherwise)
-- Extract the exact coding question(s) asked
-- Summarize the candidate's solution
-- Did they clarify constraints before coding?
-- Did they think out loud?
-- Correctness of the solution
-- Time/space complexity awareness
-- Edge cases handled
+### 4. Coding Interview (only if coding questions were asked — skip entirely otherwise)
+For EACH coding question asked:
+- **Problem Statement:** Reconstruct the full problem from everything said — the interviewer's description, any constraints mentioned, input/output format, examples discussed. Write it as a clean, self-contained problem statement someone could solve from scratch.
+- **Constraints & Clarifications:** List every constraint mentioned (input size, time/space requirements, edge cases, allowed data structures) and any clarifying questions the candidate asked.
+- **Candidate's Approach:** Step by step, what approach did the candidate describe or implement? Include their verbal reasoning and any pivots.
+- **Candidate's Code:** Reconstruct the code from what was spoken aloud (variable names, function signatures, logic). Write it as clean, runnable code in the language they used. If only pseudocode was discussed, write pseudocode.
+- **Correctness:** Does the solution work? Identify any bugs or missed cases.
+- **Complexity:** Time and space complexity of their solution. Did the candidate state it? Was it correct?
+- **Edge Cases:** Which edge cases were discussed? Which were missed?
+- **Optimal Solution:** If the candidate's solution was suboptimal, provide the optimal approach with code and complexity.
+- **Did they clarify constraints before coding?**
+- **Did they think out loud throughout?**
 
 ---
 
@@ -424,8 +612,38 @@ For each interview question asked:
 **Score: X/10**
 [Detailed feedback]
 
-### Coding Interview Details
-*(only if coding interview)*
+### Coding Problems
+*(only if coding questions were asked)*
+
+#### Problem 1: [Short title]
+**Full Problem Statement:**
+[Clean, self-contained problem description reconstructed from the transcript]
+
+**Constraints:**
+- [constraint 1]
+- [constraint 2]
+
+**Candidate's Approach:**
+[Step-by-step description of their reasoning]
+
+**Candidate's Code:**
+```[language]
+[Reconstructed code from what was spoken]
+```
+
+**Verdict:** [Correct / Partially correct / Incorrect] — [brief explanation]
+**Complexity:** Time: O(?), Space: O(?) — [did the candidate identify this?]
+
+**Missed Edge Cases:**
+- [edge case]
+
+**Optimal Solution (if candidate's was suboptimal):**
+```[language]
+[optimal code]
+```
+Time: O(?), Space: O(?)
+
+*(repeat for each coding problem)*
 
 ---
 
@@ -439,11 +657,16 @@ TRANSCRIPT:
 COMBINE_PROMPT_TEMPLATE = """\
 You are an expert interview coach. You have two analysis documents for the same interview:
 
-1. Visual Analysis — covers body language, eye contact, facial expressions (from video frames)
+1. Visual Analysis — covers body language, eye contact, facial expressions, AND any code/screen content extracted from video frames
 2. Text Analysis — covers speech patterns, filler words, answer quality (from audio transcript)
 
 Combine them into one unified, polished final report in Markdown. Do not repeat information.
 Cross-reference where relevant (e.g. "At ~4:12 your body language tensed AND your answer became vague").
+
+IMPORTANT — Screen Content & Code: If the visual analysis contains extracted code, problem statements, \
+or screen content, include it in full in the Coding Interview Details section. Merge the visually \
+extracted code with the candidate's verbal explanation from the transcript to create the most \
+complete picture of their coding solution.
 
 # Interview Performance Report
 **Date analyzed:** {date}
@@ -497,7 +720,32 @@ Cross-reference where relevant (e.g. "At ~4:12 your body language tensed AND you
 ---
 
 ## Coding Interview Details
-*(Include only if coding interview)*
+*(Include only if coding questions were asked — skip entirely otherwise)*
+
+### Problem Statement
+[Combine the problem visible on screen (from visual analysis) with any verbal description from the transcript to produce the complete problem statement.]
+
+### Candidate's Solution
+```[language]
+[The final code — prefer the visually extracted code from screen, supplemented by verbal explanations from the transcript]
+```
+
+### Analysis
+- **Correct?** [Yes / Partially / No]
+- **Time Complexity:** O(?)
+- **Space Complexity:** O(?)
+- **Edge Cases Handled:** [list]
+- **Edge Cases Missed:** [list]
+
+### Code Evolution
+[If the code changed across frames, summarize the progression — what did they write first, what did they change and why]
+
+### Optimal Solution (if candidate's was suboptimal)
+```[language]
+[optimal solution]
+```
+
+*(Repeat for each coding problem)*
 
 ---
 
@@ -615,6 +863,50 @@ TRANSCRIPT:
 
 ---
 
+## Coding Problems
+*(Skip this section entirely if no coding questions were asked)*
+
+### Problem 1: [Short descriptive title]
+
+**Full Problem Statement:**
+[Reconstruct the complete problem from the interviewer's words — description, constraints, input/output format, examples. Write it so someone could solve it cold without having heard the interview.]
+
+**Examples Discussed:**
+```
+Input: [example input discussed]
+Output: [expected output]
+Explanation: [if provided]
+```
+
+**Constraints Mentioned:**
+- [constraint]
+- [constraint]
+
+**Candidate's Verbal Solution:**
+[What approach did the candidate describe? Include their reasoning step by step.]
+
+**Candidate's Code (reconstructed from speech):**
+```[language]
+[Best reconstruction of the code from what was said aloud — variable names, function signatures, logic flow]
+```
+
+**Analysis:**
+- **Correct?** [Yes / Partially / No — explain]
+- **Time Complexity:** O(?) — [did the candidate state it?]
+- **Space Complexity:** O(?) — [did the candidate state it?]
+- **Edge Cases Handled:** [list]
+- **Edge Cases Missed:** [list]
+
+**Optimal Solution:**
+```[language]
+[Clean, optimal solution with comments]
+```
+Time: O(?), Space: O(?)
+
+*(repeat for each coding problem)*
+
+---
+
 ## Topics NOT Covered
 [3-5 relevant areas not explored — prep gaps for future rounds]
 
@@ -651,6 +943,7 @@ TRANSCRIPT:
 # Tech Prep Study Guide
 **Date:** {date}
 **Participant:** {interviewee_name}
+**Company:** [Extract the company name the candidate is preparing to interview at from the transcript. Look for mentions of a target company, hiring company, or employer name. If no company is identifiable, write "Unknown".]
 **Session Summary:** [2-3 sentences describing what kind of session this was and what was covered overall]
 
 ---
@@ -734,6 +1027,31 @@ areas where the interviewer might probe further.]
 
 ---
 
+## Code & Coding Questions
+[If ANY coding questions, code snippets, SQL queries, algorithm implementations, pseudocode, \
+or code walkthroughs were discussed, referenced, or described in the session, extract and \
+reconstruct them here. For each one:]
+
+### [Descriptive title of the coding question or code topic]
+**Context:** [When it came up and why — what question it answers or what concept it demonstrates]
+**Language:** [Python/SQL/Java/etc.]
+
+```[language]
+[Reconstruct the complete, working code. If only described verbally in the transcript, \
+write the full implementation based on the description. Include comments explaining key parts. \
+If a coding question was posed, provide both the question and the complete solution.]
+```
+
+**Key points:**
+- [What this code demonstrates]
+- [Edge cases or gotchas mentioned]
+- [How to explain this in an interview]
+
+*(repeat for every code snippet, query, or coding question discussed — if none were discussed, \
+write "No coding questions or code were discussed in this session." and move on)*
+
+---
+
 ## Action Items Before the Interview
 [Concrete, prioritized list of things to do based on this prep session. Ordered by importance.]
 
@@ -787,13 +1105,17 @@ def analyze_tech_prep(
     status_callback=None,
     interviewee_name: str = "Candidate",
     interviewer_name: str = "Interviewer",
+    extract_code: bool = False,
 ) -> tuple[str, str]:
     """
     Analyze a tech prep session video.
     Skips visual analysis entirely — only extracts audio, transcribes,
     adds speaker labels, then generates a Tech Prep Study Guide.
 
-    Returns (study_guide_markdown, transcript_markdown).
+    If extract_code=True, also scans video frames for on-screen code
+    (IDE, terminal, notebook) and appends extracted code to the study guide.
+
+    Returns (study_guide_markdown, transcript_markdown, cost_tracker).
     """
 
     def log(msg):
@@ -803,6 +1125,8 @@ def analyze_tech_prep(
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
     use_groq  = bool(groq_key)
     total     = 3 if use_groq else 2
+    if extract_code:
+        total += 1  # extra step for code frame analysis
 
     # ── Extract audio ─────────────────────────────────────────────────────────
     svc = "Groq Whisper" if use_groq else "Gemini"
@@ -894,6 +1218,44 @@ def analyze_tech_prep(
         tracker.add("Transcription", transcript_resp_obj)
     tracker.add("Study guide generation", guide_response)
 
+    # ── Code extraction from video frames (optional) ─────────────────────────
+    if extract_code:
+        log(f"Step {total}/{total} — Scanning video frames for on-screen code...")
+
+        # Check if video has a video stream
+        has_video_stream = False
+        try:
+            with av.open(video_path) as container:
+                has_video_stream = bool(container.streams.video)
+        except Exception:
+            pass
+
+        if has_video_stream:
+            code_frames = extract_code_frames(video_path, frames_per_second=0.1)
+            if code_frames:
+                log(f"  Found {len(code_frames)} unique code frame(s) — extracting code...")
+                extracted_code, code_response = extract_code_from_frames(
+                    client, model, code_frames, log
+                )
+                tracker.add(f"Code extraction ({len(code_frames)} frames)", code_response)
+                tracker.add_image_tokens(
+                    f"Code frames ({len(code_frames)} images)", len(code_frames)
+                )
+
+                if extracted_code and extracted_code.strip():
+                    study_guide += (
+                        "\n\n---\n\n"
+                        "## Extracted Screen Code\n"
+                        "*The following code was captured from screen-shared content visible in the video.*\n\n"
+                        + extracted_code
+                    )
+                else:
+                    log("  No extractable code found in the detected frames.")
+            else:
+                log("  No code frames detected in the video.")
+        else:
+            log("  No video stream found (audio-only file) — skipping code extraction.")
+
     log("Done.")
     return study_guide, transcript, tracker
 
@@ -910,6 +1272,7 @@ def analyze_video(
     interviewer_name: str = "Interviewer",
     frames_per_second: float = DEFAULT_FRAMES_PER_SECOND,
     audio_only: bool = False,
+    output_files: dict | None = None,
 ) -> tuple[str, str, str]:
     """
     Analyze an interview video using frame-based Gemini visual analysis.
@@ -922,7 +1285,10 @@ def analyze_video(
       Call 4 — Gemini text:      combine into final report
       Call 5 — Gemini text:      interview intelligence doc
 
-    Returns (report_markdown, transcript_markdown, intel_markdown).
+    output_files: dict with keys "transcript", "analysis", "intel" (bool values).
+    Skips API calls for outputs that aren't requested.
+
+    Returns (report_markdown, transcript_markdown, intel_markdown, cost_tracker).
     """
 
     def log(msg):
@@ -945,6 +1311,7 @@ def analyze_video(
             interviewer_name=interviewer_name,
             frames_per_second=frames_per_second,
             audio_only=audio_only,
+            output_files=output_files,
         )
 
 
@@ -954,23 +1321,27 @@ def analyze_video(
 def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
                     interviewee_name, interviewer_name,
                     frames_per_second: float = DEFAULT_FRAMES_PER_SECOND,
-                    audio_only: bool = False):
+                    audio_only: bool = False,
+                    output_files: dict | None = None):
     """qwen param kept for signature compatibility but is no longer used."""
 
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
     use_groq  = bool(groq_key)
+    _of = output_files or {"transcript": True, "analysis": True, "intel": True}
 
-    # Audio-only mode skips visual analysis entirely (saves 1 call)
-    if audio_only:
-        total          = 4 if use_groq else 3
+    # Skip visual analysis if audio-only OR if analysis report isn't requested
+    skip_visual = audio_only or not _of.get("analysis")
+
+    if skip_visual:
+        total          = 5 if use_groq else 4
         frames         = []
         visual_analysis   = "*Audio-only mode — no visual analysis performed.*"
         visual_response_obj = None
     else:
         total = 6 if use_groq else 5
 
-    # ── Extract frames (skipped in audio-only mode) ───────────────────────────
-    if not audio_only:
+    # ── Extract frames (skipped when visual analysis not needed) ──────────────
+    if not skip_visual:
         interval_s = round(1.0 / frames_per_second, 1)
         log(f"Extracting video frames (1 every {interval_s}s)...")
         frames = extract_frames(video_path, frames_per_second)
@@ -982,8 +1353,8 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
     audio_path, audio_mime = extract_audio(video_path)
     log("  Audio extracted." if audio_path else "  No audio track found.")
 
-    # ── Call 1: Gemini visual analysis — skipped in audio-only mode ───────────
-    if not audio_only:
+    # ── Call 1: Gemini visual analysis — skipped when not needed ────────────
+    if not skip_visual:
         log(f"Call 1/{total} — Visual analysis (Gemini, {len(frames)} frames)...")
         visual_prompt = VISUAL_ONLY_PROMPT.format(
             interviewee_name=interviewee_name,
@@ -1077,22 +1448,37 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
         except Exception:
             pass
 
-    # ── Remaining text calls (Gemini) ─────────────────────────────────────────
-    report, transcript, intel, text_responses = _text_calls(
-        gemini=gemini,
-        model=model,
-        transcript=transcript,
-        visual_analysis=visual_analysis,
-        log=log,
-        interviewee_name=interviewee_name,
-        interviewer_name=interviewer_name,
-        call_offset=call_offset,
-        total_calls=total,
-    )
+    # ── Remaining text calls (Gemini) — skipped if only transcript selected ──
+    report = ""
+    intel = ""
+    text_responses = []
+
+    if _of.get("analysis") or _of.get("intel"):
+        remaining_calls = 0
+        if _of.get("analysis"):
+            remaining_calls += 2  # speech analysis + report assembly
+        if _of.get("intel"):
+            remaining_calls += 1  # intel extraction
+        total = call_offset + remaining_calls
+
+        report, transcript, intel, text_responses = _text_calls(
+            gemini=gemini,
+            model=model,
+            transcript=transcript,
+            visual_analysis=visual_analysis,
+            log=log,
+            interviewee_name=interviewee_name,
+            interviewer_name=interviewer_name,
+            call_offset=call_offset,
+            total_calls=total,
+            output_files=_of,
+        )
+    else:
+        log("Done.")
 
     # ── Build cost tracker ────────────────────────────────────────────────────
     tracker = CostTracker(model=model)
-    if not audio_only:
+    if not skip_visual:
         tracker.add_image_tokens(f"Visual analysis ({len(frames)} frames)", len(frames))
     if visual_response_obj is not None:
         tracker.add("Visual analysis (Gemini)", visual_response_obj)
@@ -1178,49 +1564,55 @@ def _analyze_gemini_only(client, video_path, filename, mime, model, log,
 # ── Shared text-only calls (3-5 hybrid / 2-4 Gemini-only) ────────────────────
 
 def _text_calls(gemini, model, transcript, visual_analysis, log,
-                interviewee_name, interviewer_name, call_offset, total_calls):
+                interviewee_name, interviewer_name, call_offset, total_calls,
+                output_files: dict | None = None):
     """Returns (report, transcript, intel, responses) where responses is a list of (label, response)."""
 
+    _of = output_files or {"transcript": True, "analysis": True, "intel": True}
     n = call_offset + 1
     responses = []
+    report = ""
+    intel = ""
 
-    log(f"Call {n}/{total_calls} — Analyzing speech patterns and answer quality...")
-    text_response = gemini.models.generate_content(
-        model=model,
-        contents=TEXT_PROMPT_TEMPLATE.format(transcript=transcript),
-        config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=65535),
-    )
-    text_analysis = text_response.text
-    responses.append(("Speech & content analysis", text_response))
-    n += 1
+    if _of.get("analysis"):
+        log(f"Call {n}/{total_calls} — Analyzing speech patterns and answer quality...")
+        text_response = gemini.models.generate_content(
+            model=model,
+            contents=TEXT_PROMPT_TEMPLATE.format(transcript=transcript),
+            config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=65535),
+        )
+        text_analysis = text_response.text
+        responses.append(("Speech & content analysis", text_response))
+        n += 1
 
-    log(f"Call {n}/{total_calls} — Assembling final report...")
-    combine_response = gemini.models.generate_content(
-        model=model,
-        contents=COMBINE_PROMPT_TEMPLATE.format(
-            date=datetime.now().strftime("%B %d, %Y"),
-            visual_analysis=visual_analysis,
-            text_analysis=text_analysis,
-        ),
-        config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=65535),
-    )
-    report = combine_response.text
-    responses.append(("Final report assembly", combine_response))
-    n += 1
+        log(f"Call {n}/{total_calls} — Assembling final report...")
+        combine_response = gemini.models.generate_content(
+            model=model,
+            contents=COMBINE_PROMPT_TEMPLATE.format(
+                date=datetime.now().strftime("%B %d, %Y"),
+                visual_analysis=visual_analysis,
+                text_analysis=text_analysis,
+            ),
+            config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=65535),
+        )
+        report = combine_response.text
+        responses.append(("Final report assembly", combine_response))
+        n += 1
 
-    log(f"Call {n}/{total_calls} — Extracting interview intelligence...")
-    intel_response = gemini.models.generate_content(
-        model=model,
-        contents=INTEL_PROMPT_TEMPLATE.format(
-            transcript=transcript,
-            date=datetime.now().strftime("%B %d, %Y"),
-            interviewee_name=interviewee_name,
-            interviewer_name=interviewer_name,
-        ),
-        config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=65535),
-    )
-    intel = intel_response.text
-    responses.append(("Interview intelligence", intel_response))
+    if _of.get("intel"):
+        log(f"Call {n}/{total_calls} — Extracting interview intelligence...")
+        intel_response = gemini.models.generate_content(
+            model=model,
+            contents=INTEL_PROMPT_TEMPLATE.format(
+                transcript=transcript,
+                date=datetime.now().strftime("%B %d, %Y"),
+                interviewee_name=interviewee_name,
+                interviewer_name=interviewer_name,
+            ),
+            config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=65535),
+        )
+        intel = intel_response.text
+        responses.append(("Interview intelligence", intel_response))
 
     log("Done.")
     return report, transcript, intel, responses
