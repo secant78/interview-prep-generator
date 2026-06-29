@@ -569,6 +569,7 @@ Generate the full document following this EXACT structure:
 # Tech Prep Study Guide
 **Company:** {company}
 **Role:** {role}
+**Category:** [Classify the primary technology domain of this role. Choose exactly ONE: Mobile / Cloud / Big Data / Data Science / General. Base this on the job description requirements and the candidate's relevant experience.]
 **Candidate:** [Full name from resume]
 **Prepared:** [Current month and year]
 

@@ -796,6 +796,7 @@ TRANSCRIPT:
 **Interviewee:** {interviewee_name}
 **Interviewer:** {interviewer_name}
 **Interview Type:** [Behavioral / Technical / System Design / Coding / Mixed]
+**Category:** [Classify the primary technology domain discussed in this interview. Choose exactly ONE: Mobile / Cloud / Big Data / Data Science / General. Base this on the majority of technical topics, tools, and questions — not just a single mention.]
 **Duration:** [Estimated from timestamps]
 
 ---
@@ -944,6 +945,7 @@ TRANSCRIPT:
 **Date:** {date}
 **Participant:** {interviewee_name}
 **Company:** [Extract the company name the candidate is preparing to interview at from the transcript. Look for mentions of a target company, hiring company, or employer name. If no company is identifiable, write "Unknown".]
+**Category:** [Classify the primary technology domain of this session. Choose exactly ONE: Mobile / Cloud / Big Data / Data Science / General. Base this on the majority of technical topics, tools, and questions discussed.]
 **Session Summary:** [2-3 sentences describing what kind of session this was and what was covered overall]
 
 ---

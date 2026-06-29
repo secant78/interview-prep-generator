@@ -150,6 +150,19 @@ def _extract_company(text: str) -> str | None:
     return None
 
 
+_VALID_CATEGORIES = {"mobile", "cloud", "big data", "data science"}
+
+def _extract_category(text: str) -> str | None:
+    """Extract a technology category from a **Category:** line in generated markdown."""
+    for line in text.splitlines():
+        if line.startswith("**Category:**"):
+            raw = line.split("**Category:**", 1)[-1].strip()
+            raw = re.sub(r'\s*\(.*', '', raw).strip()
+            if raw.lower() in _VALID_CATEGORIES:
+                return raw
+    return None
+
+
 # ── S3 helpers ────────────────────────────────────────────────────────────────
 _S3_BUCKET = os.getenv("S3_BUCKET")          # unset locally → S3 upload skipped
 _s3_client = None
@@ -447,7 +460,9 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
         company_slug = slugify(company) if company else None
         video_stem  = video_filename.rsplit(".", 1)[0]
         folder_name = slugify(video_stem)
-        date_str = datetime.now().strftime("%m-%d-%y")
+        # Extract date from input filename (e.g. "6-22-26 Shrinivas Interview.webm")
+        _date_match = re.match(r'^(\d{1,2}-\d{1,2}-\d{2,4})', video_filename)
+        date_str = _date_match.group(1) if _date_match else datetime.now().strftime("%m-%d-%y")
 
         if video_type == "Tech Prep":
             # ── Tech Prep flow ────────────────────────────────────────────────
@@ -477,7 +492,18 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
                 if not company_slug:
                     company_slug = "TechPrep"
 
-            named_folder = f"{date_str}_{company_slug}"
+            # Extract technology category
+            category = None
+            for source in [study_guide, transcript]:
+                if source:
+                    category = _extract_category(source)
+                    if category:
+                        break
+
+            if category:
+                named_folder = f"{date_str}_{company_slug}_{slugify(category)}"
+            else:
+                named_folder = f"{date_str}_{company_slug}"
             run_dir = get_typed_output_dir("tech-prep") / named_folder
             run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -577,8 +603,19 @@ def _run_analysis_thread(job: dict, gemini, tmp_path, video_filename, model_choi
                 if not company_slug:
                     company_slug = "Unknown"
 
-            # Build folder name with detected company: date_company_videostem
-            named_folder = f"{date_str}_{company_slug}"
+            # Extract technology category
+            category = None
+            for source in [intel, report, transcript]:
+                if source:
+                    category = _extract_category(source)
+                    if category:
+                        break
+
+            # Build folder name: date_company or date_company_category
+            if category:
+                named_folder = f"{date_str}_{company_slug}_{slugify(category)}"
+            else:
+                named_folder = f"{date_str}_{company_slug}"
             run_dir = get_typed_output_dir("interview") / named_folder
             run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -757,17 +794,21 @@ def page_analyze():
 
     # ── Extract screen code ─────────────────────────────────────────────────
     if not _uploaded_is_audio:
-        extract_code = st.checkbox(
-            "Extract screen code",
-            value=False,
+        _code_label = st.selectbox(
+            "Screen Code",
+            options=[
+                "Off — don't scan for code",
+                "On — extract code from screen (+ ~$0.01-0.02)",
+            ],
+            index=0,
             key="av_extract_code",
             help=(
                 "Scans video frames for code visible on screen (IDE, terminal, notebook). "
                 "Only frames that look like code are sent to the API — typically 5-15 frames "
-                "instead of hundreds, costing ~$0.01-0.02 extra. "
-                "Audio-only files are not supported."
+                "instead of hundreds. Audio-only files are not supported."
             ),
         )
+        extract_code = _code_label.startswith("On")
     else:
         extract_code = False
 

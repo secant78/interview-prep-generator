@@ -2676,5 +2676,137 @@
       }
     ],
     "video_type": "Tech Prep"
+  },
+  {
+    "timestamp": "2026-06-29T10:39:28.315808",
+    "tab": "Analyze Video",
+    "company": "Unknown",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.020518,
+    "input_tokens": 24092,
+    "output_tokens": 28173,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 10712,
+        "output_tokens": 12380,
+        "cost": 0.009035
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 13380,
+        "output_tokens": 15793,
+        "cost": 0.011483
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-29T11:29:00.797570",
+    "tab": "Analyze Video",
+    "company": "Snorkel_AI",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.023921,
+    "input_tokens": 38812,
+    "output_tokens": 30165,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 10257,
+        "output_tokens": 11556,
+        "cost": 0.008472
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 12472,
+        "output_tokens": 2829,
+        "cost": 0.003568
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 3527,
+        "output_tokens": 6838,
+        "cost": 0.004632
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 12556,
+        "output_tokens": 8942,
+        "cost": 0.007249
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-29T11:29:52.772179",
+    "tab": "Analyze Video",
+    "company": "Quantum_Black",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.016539,
+    "input_tokens": 25503,
+    "output_tokens": 21190,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 11411,
+        "output_tokens": 13092,
+        "cost": 0.009567
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 14092,
+        "output_tokens": 8098,
+        "cost": 0.006973
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-29T11:29:51.830532",
+    "tab": "Analyze Video",
+    "company": "Unknown",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.018972,
+    "input_tokens": 31657,
+    "output_tokens": 23706,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 17798,
+        "output_tokens": 12858,
+        "cost": 0.010384
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 13859,
+        "output_tokens": 10848,
+        "cost": 0.008588
+      }
+    ],
+    "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-29T11:54:19.161436",
+    "tab": "Analyze Video",
+    "company": "Unknown",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.015399,
+    "input_tokens": 22890,
+    "output_tokens": 19942,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 10019,
+        "output_tokens": 11869,
+        "cost": 0.008624
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 12871,
+        "output_tokens": 8073,
+        "cost": 0.006774
+      }
+    ],
+    "video_type": "Interview"
   }
 ]
