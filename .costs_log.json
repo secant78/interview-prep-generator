@@ -2808,5 +2808,53 @@
       }
     ],
     "video_type": "Interview"
+  },
+  {
+    "timestamp": "2026-06-29T12:01:49.687535",
+    "tab": "Analyze Video",
+    "company": "NA_-_Audio-only_interview",
+    "model": "gemini-2.5-flash",
+    "total_cost": 0.036396,
+    "input_tokens": 55564,
+    "output_tokens": 46769,
+    "calls": [
+      {
+        "label": "Speaker labeling",
+        "input_tokens": 13824,
+        "output_tokens": 16047,
+        "cost": 0.011702
+      },
+      {
+        "label": "Speech & content analysis",
+        "input_tokens": 16963,
+        "output_tokens": 5162,
+        "cost": 0.005642
+      },
+      {
+        "label": "Final report assembly",
+        "input_tokens": 5860,
+        "output_tokens": 2487,
+        "cost": 0.002371
+      },
+      {
+        "label": "Interview intelligence",
+        "input_tokens": 17049,
+        "output_tokens": 23049,
+        "cost": 0.016387
+      },
+      {
+        "label": "Code extraction (3 frames)",
+        "input_tokens": 1094,
+        "output_tokens": 24,
+        "cost": 0.000178
+      },
+      {
+        "label": "Code frames (3 images)",
+        "input_tokens": 774,
+        "output_tokens": 0,
+        "cost": 0.000116
+      }
+    ],
+    "video_type": "Interview"
   }
 ]

@@ -1,5 +1,6 @@
 .env
 .app_config.json
+.nextim_auth_state.json
 __pycache__/
 *.pyc
 output/
