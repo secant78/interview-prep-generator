@@ -7,6 +7,11 @@ __pycache__/
 output/
 interviewee_names.csv
 
+# Data pipeline scripts
+scrape_recordings.py
+rename_drive_recordings.py
+extract_names.py
+
 # Credentials & secrets
 *.json
 oauth_token.json
