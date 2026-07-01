@@ -5,3 +5,10 @@
 __pycache__/
 *.pyc
 output/
+interviewee_names.csv
+
+# Credentials & secrets
+*.json
+oauth_token.json
+tonal-bloom-479218-i9-65e1bd9da553.json
+client_secret_*.json

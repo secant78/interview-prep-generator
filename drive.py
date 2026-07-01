@@ -9,26 +9,55 @@ from pathlib import Path
 from functools import lru_cache
 
 from dotenv import load_dotenv
-from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
 import io
 
 load_dotenv()
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
+_OAUTH_TOKEN_FILE = "oauth_token.json"
+_OAUTH_CREDENTIALS_FILE = os.getenv("GOOGLE_OAUTH_CREDENTIALS", "oauth_credentials.json")
 
 
+@lru_cache(maxsize=1)
 def _get_service():
-    creds_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    if not creds_path or not Path(creds_path).exists():
+    """Return a Drive service authenticated as the user via OAuth, falling back to service account."""
+    from google.auth.transport.requests import Request
+
+    # --- OAuth path (preferred: uploads count against your personal quota) ---
+    token_path = Path(_OAUTH_TOKEN_FILE)
+    creds_path = Path(_OAUTH_CREDENTIALS_FILE)
+
+    if creds_path.exists():
+        creds = None
+        if token_path.exists():
+            from google.oauth2.credentials import Credentials
+            creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                from google_auth_oauthlib.flow import InstalledAppFlow
+                flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
+                creds = flow.run_local_server(port=0)
+            with open(token_path, "w") as f:
+                f.write(creds.to_json())
+
+        return build("drive", "v3", credentials=creds)
+
+    # --- Service account fallback ---
+    from google.oauth2 import service_account as sa
+    sa_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    if not sa_path or not Path(sa_path).exists():
         raise FileNotFoundError(
-            f"Service account JSON not found at: {creds_path}\n"
-            "Set GOOGLE_SERVICE_ACCOUNT_JSON in .env"
+            "No OAuth credentials found. Either:\n"
+            f"  1. Place oauth_credentials.json in the project folder (recommended), or\n"
+            f"  2. Set GOOGLE_SERVICE_ACCOUNT_JSON in .env\n"
+            "See README for setup instructions."
         )
-    creds = service_account.Credentials.from_service_account_file(
-        creds_path, scopes=SCOPES
-    )
+    creds = sa.Credentials.from_service_account_file(sa_path, scopes=SCOPES)
     return build("drive", "v3", credentials=creds)
 
 
@@ -65,6 +94,42 @@ def _get_or_create_subfolder(service, parent_id: str, name: str) -> str:
     }
     folder = service.files().create(body=meta, fields="id", supportsAllDrives=True).execute()
     return folder["id"]
+
+
+def upload_video_stream(stream: io.IOBase, filename: str, drive_subfolder: str) -> str:
+    """
+    Upload a video file to Drive from a stream (no local file needed).
+    Uses resumable upload — safe for large files.
+    Returns the Drive file ID.
+    """
+    folder_name = os.getenv("GOOGLE_DRIVE_FOLDER_NAME", "interview-prep")
+    service = _get_service()
+
+    root_id = _get_folder_id(service, folder_name)
+    if not root_id:
+        raise RuntimeError(
+            f"Drive folder '{folder_name}' not found. "
+            "Make sure you shared it with the service account."
+        )
+
+    sub_id = _get_or_create_subfolder(service, root_id, drive_subfolder)
+
+    existing = service.files().list(
+        q=f"name='{filename}' and '{sub_id}' in parents and trashed=false",
+        fields="files(id, size)",
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True,
+    ).execute().get("files", [])
+
+    if existing:
+        return existing[0]["id"]
+
+    media = MediaIoBaseUpload(stream, mimetype="video/webm", chunksize=8 * 1024 * 1024, resumable=True)
+    meta = {"name": filename, "parents": [sub_id]}
+    file = service.files().create(
+        body=meta, media_body=media, fields="id", supportsAllDrives=True,
+    ).execute()
+    return file["id"]
 
 
 def upload_file(local_path: str, drive_subfolder: str) -> str:

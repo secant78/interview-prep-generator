@@ -29,8 +29,20 @@ RECORDINGS_URL = f"{NEXTIM_BASE_URL}/recordings/interviews"
 DEFAULT_OUTPUT = os.path.join(Path.home(), "Downloads", "interview_recordings")
 
 
-def get_browser_context(playwright, headless=True):
+def get_browser_context(playwright, headless=True, use_existing_chrome=False):
     """Launch browser and return a context with stored auth state if available."""
+    if use_existing_chrome:
+        # Connect to an already-running Chrome with --remote-debugging-port=9222
+        try:
+            browser = playwright.chromium.connect_over_cdp("http://localhost:9222")
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            return browser, context
+        except Exception as e:
+            print(f"[ERROR] Could not connect to Chrome on port 9222: {e}")
+            print("        Make sure Chrome is running with --remote-debugging-port=9222")
+            print("        See instructions printed at startup.")
+            sys.exit(1)
+
     state_path = Path(".nextim_auth_state.json")
     browser = playwright.chromium.launch(headless=headless)
     if state_path.exists():
@@ -109,47 +121,99 @@ def apply_search_filter(page, search_text: str):
         time.sleep(2)
 
 
+_GENERIC_TEXTS = {"open", "view", "download", "watch", "play", "start", "go", "click here", "recording"}
+
+
 def scrape_recording_cards(page) -> list[dict]:
-    """Extract recording info from the current page."""
+    """Extract recording info from the current page using JS DOM traversal."""
+
+    raw = page.evaluate("""
+        () => {
+            const GENERIC = new Set(["open","view","download","watch","play","start","go","click here","recording"]);
+            const results = [];
+
+            function cardTitle(el) {
+                // Walk up to 6 ancestors looking for a meaningful title
+                let node = el.parentElement;
+                for (let i = 0; i < 6 && node; i++, node = node.parentElement) {
+                    // Collect all text nodes / heading / span / p inside this ancestor
+                    const kids = node.querySelectorAll('h1,h2,h3,h4,h5,h6,p,span,[class*="title"],[class*="name"],[class*="label"]');
+                    for (const k of kids) {
+                        const t = k.textContent.trim();
+                        if (t && !GENERIC.has(t.toLowerCase()) && t.length > 4 && t.length < 200) {
+                            return t.replace(/\\s+/g, ' ');
+                        }
+                    }
+                    // Fall back to the whole ancestor text if it's short enough
+                    const full = node.textContent.trim().replace(/\\s+/g, ' ');
+                    if (full && !GENERIC.has(full.toLowerCase()) && full.length > 4 && full.length < 200) {
+                        // Return only the first line-ish chunk
+                        const first = full.split(/[\\n|]+/)[0].trim();
+                        if (first && !GENERIC.has(first.toLowerCase()) && first.length > 4) {
+                            return first.substring(0, 120);
+                        }
+                    }
+                }
+                return "";
+            }
+
+            document.querySelectorAll('a').forEach(a => {
+                const href = a.href || '';
+                if (!href.includes('.webm') && !href.includes('Recording') && !href.includes('recording')) return;
+                const linkText = a.textContent.trim();
+                const title = (!linkText || GENERIC.has(linkText.toLowerCase()))
+                    ? cardTitle(a)
+                    : linkText;
+                results.push({ href, title: title.substring(0, 150) });
+            });
+
+            return results;
+        }
+    """)
+
     recordings = []
+    for item in raw:
+        href = item["href"]
+        title = item["title"].strip()
 
-    cards = page.locator("a[href*='Recording'], div:has(a[href*='.webm']), [class*='card'], [class*='recording']")
+        # Final fallback: use URL path segments
+        if not title or title.lower() in _GENERIC_TEXTS:
+            parts = [p for p in href.split("/") if p and p.lower() not in _GENERIC_TEXTS]
+            title = parts[-1].split("?")[0] if parts else "recording"
+            title = title.replace("%20", " ").replace("-", " ").replace("_", " ")
 
-    if cards.count() == 0:
-        links = page.locator("a[href*='.webm']")
-        for i in range(links.count()):
-            link = links.nth(i)
-            href = link.get_attribute("href") or ""
-            text = link.inner_text().strip()
-            recordings.append({
-                "title": text or Path(href).stem,
-                "url": urljoin(NEXTIM_BASE_URL, href),
-                "filename": Path(href).name,
-            })
-        return recordings
+        url = href if href.startswith("http") else urljoin(NEXTIM_BASE_URL, href)
+        # Derive title from the folder name in the URL (e.g. "01-12-25-5-00PM- R1 - Janvi B - TP-Link")
+        # URL structure: recordings/interviews/<folder>/<Recording file>.webm
+        decoded_href = href.replace("%20", " ").replace("%23", "#")
+        parts = [p for p in decoded_href.split("/") if p]
+        folder_name = parts[-2] if len(parts) >= 2 else ""
+        # Strip internal hash tokens like #-#TECHPREP#-#TC
+        folder_name = re.sub(r'#-#\w+', '', folder_name).strip(" #-")
+        display_title = folder_name if folder_name else title
+        filename = sanitize_filename(display_title)
+        recordings.append({
+            "title": display_title,
+            "url": url,
+            "filename": filename,
+        })
 
-    all_links = page.locator("a")
-    for i in range(all_links.count()):
-        link = all_links.nth(i)
-        href = link.get_attribute("href") or ""
-        if ".webm" in href or "Recording" in href:
-            text = link.inner_text().strip()
-            if not text:
-                text = link.locator("..").inner_text().strip()[:100]
-            filename = Path(href).name if "." in Path(href).name else href.split("/")[-1] + ".webm"
-            recordings.append({
-                "title": text or filename,
-                "url": urljoin(NEXTIM_BASE_URL, href),
-                "filename": sanitize_filename(text or filename),
-            })
-
-    # Deduplicate by URL
-    seen = set()
+    # Deduplicate by URL; suffix colliding filenames (Open.webm → Open_1.webm …)
+    seen_urls: set[str] = set()
+    seen_filenames: dict[str, int] = {}
     unique = []
     for r in recordings:
-        if r["url"] not in seen:
-            seen.add(r["url"])
-            unique.append(r)
+        if r["url"] in seen_urls:
+            continue
+        seen_urls.add(r["url"])
+        fn = r["filename"]
+        if fn in seen_filenames:
+            seen_filenames[fn] += 1
+            stem = fn[:-5] if fn.endswith(".webm") else fn
+            r["filename"] = f"{stem}_{seen_filenames[fn]}.webm"
+        else:
+            seen_filenames[fn] = 0
+        unique.append(r)
 
     return unique
 
@@ -187,7 +251,7 @@ def scrape_recording_links_via_dom(page) -> list[dict]:
         recordings.append({
             "title": text or filename,
             "url": href,
-            "filename": sanitize_filename(text if text != "video-element" else filename),
+            "filename": filename,
         })
 
     seen = set()
@@ -221,60 +285,103 @@ def sanitize_filename(name: str) -> str:
     return name
 
 
+def _requests_session(page):
+    """Build a requests.Session authenticated with the Playwright browser's cookies."""
+    import requests
+    session = requests.Session()
+    for cookie in page.context.cookies():
+        session.cookies.set(cookie["name"], cookie["value"], domain=cookie.get("domain", ""))
+    return session
+
+
+def upload_to_gcs(session, url: str, filename: str, bucket_name: str, gcs_prefix: str) -> bool:
+    """Stream a recording directly from Next IM into GCS without writing to disk."""
+    try:
+        from google.cloud import storage as gcs
+    except ImportError:
+        print("[ERROR] google-cloud-storage not installed. Run: pip install google-cloud-storage")
+        return False
+
+    blob_name = f"{gcs_prefix.rstrip('/')}/{filename}" if gcs_prefix else filename
+
+    client = gcs.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+
+    if blob.exists():
+        print(f"  [SKIP] Already in GCS: gs://{bucket_name}/{blob_name}")
+        return True
+
+    print(f"  [UPLOADING] {filename} → gs://{bucket_name}/{blob_name} ...")
+    try:
+        with session.get(url, stream=True, timeout=600) as resp:
+            resp.raise_for_status()
+            if "text/html" in resp.headers.get("content-type", ""):
+                print(f"  [FAIL] {filename}: got HTML (auth may have expired)")
+                return False
+            with blob.open("wb") as gcs_file:
+                for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
+                    gcs_file.write(chunk)
+        size_mb = blob.size / (1024 * 1024) if blob.size else 0
+        print(f"  [OK] {filename} ({size_mb:.1f} MB)")
+        return True
+    except Exception as e:
+        print(f"  [FAIL] {filename}: {e}")
+        return False
+
+
 def download_recording(page, url: str, output_path: str) -> bool:
-    """Download a single recording file."""
+    """Download a single recording file to local disk."""
     output = Path(output_path)
-    if output.exists() and output.stat().st_size > 0:
+    if output.exists() and output.stat().st_size > 1024 * 100:
         print(f"  [SKIP] Already exists: {output.name}")
         return True
 
     output.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        with page.expect_download(timeout=600000) as download_info:
-            page.evaluate(f"""
-                () => {{
-                    const a = document.createElement('a');
-                    a.href = '{url}';
-                    a.download = '';
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                }}
-            """)
-        download = download_info.value
-        download.save_as(output_path)
+        import requests
+    except ImportError:
+        print("[ERROR] requests not installed. Run: pip install requests")
+        return False
+
+    session = _requests_session(page)
+
+    try:
+        print(f"  [DOWNLOADING] {output.name}...")
+        with session.get(url, stream=True, timeout=600) as resp:
+            resp.raise_for_status()
+            if "text/html" in resp.headers.get("content-type", ""):
+                print(f"  [FAIL] {output.name}: got HTML (auth may have expired)")
+                return False
+            with open(output_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
+                    f.write(chunk)
         size_mb = output.stat().st_size / (1024 * 1024)
         print(f"  [OK] {output.name} ({size_mb:.1f} MB)")
         return True
-    except Exception:
-        # Fallback: use request context to download directly
-        try:
-            response = page.context.request.get(url, timeout=600000)
-            if response.ok:
-                with open(output_path, "wb") as f:
-                    f.write(response.body())
-                size_mb = output.stat().st_size / (1024 * 1024)
-                print(f"  [OK] {output.name} ({size_mb:.1f} MB)")
-                return True
-            else:
-                print(f"  [FAIL] HTTP {response.status} for {output.name}")
-                return False
-        except Exception as e2:
-            print(f"  [FAIL] {output.name}: {e2}")
-            return False
+    except Exception as e:
+        print(f"  [FAIL] {output.name}: {e}")
+        if output.exists() and output.stat().st_size < 1024 * 100:
+            output.unlink(missing_ok=True)
+        return False
 
 
 def main():
     parser = argparse.ArgumentParser(description="Scrape interview recordings from Next IM")
     parser.add_argument("--company", default="", help="Filter by company name in dropdown")
     parser.add_argument("--search", default="", help="Filter by search text")
-    parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Output directory for downloads")
+    parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Local output directory (ignored when --gcs-bucket is set)")
+    parser.add_argument("--gcs-bucket", default=os.getenv("GCS_BUCKET", ""), help="GCS bucket name to upload recordings to")
+    parser.add_argument("--gcs-prefix", default=os.getenv("GCS_PREFIX", "interview_recordings"), help="Folder prefix inside the GCS bucket")
+    parser.add_argument("--drive", action="store_true", help="Upload recordings to Google Drive instead of local disk")
+    parser.add_argument("--drive-folder", default=os.getenv("DRIVE_RECORDINGS_FOLDER", "interview_recordings"), help="Subfolder name inside the Drive interview-prep folder")
+    parser.add_argument("--min-round", type=int, default=0, help="Only include recordings at this round or higher (e.g. 2 for R2+)")
     parser.add_argument("--limit", type=int, default=0, help="Max number of recordings to download (0 = all)")
     parser.add_argument("--list-only", action="store_true", help="List recordings without downloading")
     parser.add_argument("--pick", action="store_true", help="Interactively choose which recordings to download")
     parser.add_argument("--no-headless", action="store_true", help="Show browser window (for manual login)")
-    parser.add_argument("--min-round", type=int, default=0, help="Only include recordings at or above this round (e.g. --min-round 2 keeps R2, R3, R4, Rfinal)")
+    parser.add_argument("--use-chrome", action="store_true", help="Connect to your existing Chrome browser instead of opening a new one")
     args = parser.parse_args()
 
     try:
@@ -283,13 +390,23 @@ def main():
         print("[ERROR] playwright not installed. Run: pip install playwright && playwright install chromium")
         sys.exit(1)
 
+    if args.use_chrome:
+        print("\n[INFO] To connect to your existing Chrome, you need to relaunch it with remote debugging enabled.")
+        print("       Close Chrome completely, then run this command:\n")
+        print('       "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\\chrome-debug"\n')
+        print("       Then navigate to nextim.itcapp.ai/recordings/interviews in that Chrome window,")
+        print("       expand the list until all recordings are visible, then press Enter here.\n")
+        input("       Press Enter when ready...")
+
     with sync_playwright() as p:
         headless = not args.no_headless
-        browser, context = get_browser_context(p, headless=headless)
-        page = context.new_page()
+        browser, context = get_browser_context(p, headless=headless, use_existing_chrome=args.use_chrome)
+        page = context.new_page() if not args.use_chrome else context.pages[0] if context.pages else context.new_page()
 
         try:
-            if args.no_headless:
+            if args.use_chrome:
+                pass  # user already logged in and expanded the list
+            elif args.no_headless:
                 manual_login(page)
             else:
                 login_if_needed(page)
@@ -306,7 +423,10 @@ def main():
             if args.search:
                 apply_search_filter(page, args.search)
 
-            print("\n[INFO] Scanning for recordings...")
+            print("\n[INFO] Expand the recordings list in the browser (click 'show more' until all are visible).")
+            input("      Press Enter here when ready to scrape...\n")
+
+            print("[INFO] Scanning for recordings...")
             recordings = scrape_recording_cards(page)
 
             if not recordings:
@@ -359,14 +479,54 @@ def main():
                 selected = selected[:args.limit]
 
             recordings = selected
-            print(f"\n[INFO] Downloading {len(recordings)} recording(s) to {output_dir.resolve()}...\n")
-            success = 0
-            for rec in recordings:
-                out_path = str(output_dir / rec["filename"])
-                if download_recording(page, rec["url"], out_path):
-                    success += 1
 
-            print(f"\n[DONE] Downloaded {success}/{len(recordings)} recordings.")
+            success = 0
+            if args.drive:
+                from drive import upload_video_stream
+                session = _requests_session(page)
+                drive_folder = os.getenv("GOOGLE_DRIVE_FOLDER_NAME", "interview-prep")
+                print(f"\n[INFO] Uploading {len(recordings)} recording(s) to Google Drive ({drive_folder}/{args.drive_folder})...\n")
+                import tempfile
+                for rec in recordings:
+                    print(f"  [UPLOADING] {rec['filename']} ...")
+                    tmp_path = None
+                    try:
+                        with session.get(rec["url"], stream=True, timeout=600) as resp:
+                            resp.raise_for_status()
+                            if "text/html" in resp.headers.get("content-type", ""):
+                                print(f"  [FAIL] {rec['filename']}: got HTML (auth may have expired)")
+                                continue
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+                                tmp_path = tmp.name
+                                for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
+                                    tmp.write(chunk)
+                        size_mb = Path(tmp_path).stat().st_size / (1024 * 1024)
+                        with open(tmp_path, "rb") as f:
+                            file_id = upload_video_stream(f, rec["filename"], args.drive_folder)
+                        print(f"  [OK] {rec['filename']} ({size_mb:.1f} MB, Drive ID: {file_id})")
+                        success += 1
+                    except Exception as e:
+                        print(f"  [FAIL] {rec['filename']}: {e}")
+                    finally:
+                        if tmp_path and Path(tmp_path).exists():
+                            Path(tmp_path).unlink()
+                print(f"\n[DONE] Uploaded {success}/{len(recordings)} recordings to Google Drive.")
+            elif args.gcs_bucket:
+                print(f"\n[INFO] Uploading {len(recordings)} recording(s) to gs://{args.gcs_bucket}/{args.gcs_prefix}/...\n")
+                session = _requests_session(page)
+                for rec in recordings:
+                    if upload_to_gcs(session, rec["url"], rec["filename"], args.gcs_bucket, args.gcs_prefix):
+                        success += 1
+                print(f"\n[DONE] Uploaded {success}/{len(recordings)} recordings to GCS.")
+            else:
+                output_dir = Path(args.output)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                print(f"\n[INFO] Downloading {len(recordings)} recording(s) to {output_dir.resolve()}...\n")
+                for rec in recordings:
+                    out_path = str(output_dir / rec["filename"])
+                    if download_recording(page, rec["url"], out_path):
+                        success += 1
+                print(f"\n[DONE] Downloaded {success}/{len(recordings)} recordings.")
 
         finally:
             browser.close()

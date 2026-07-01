@@ -1318,6 +1318,42 @@ def analyze_video(
 
 
 
+# ── Low-content detection ─────────────────────────────────────────────────────
+
+_LOW_CONTENT_PHRASES = {
+    "thank you for joining", "we'll be in touch", "no audio", "no speech",
+    "music", "[music]", "[silence]", "[blank]", "[no audio]",
+}
+
+def _is_low_content_transcript(transcript: str, min_words: int = 50) -> bool:
+    """Return True if the transcript has too little content to be worth analyzing."""
+    if not transcript or not transcript.strip():
+        return True
+    # Strip markdown headers and timestamps
+    import re
+    clean = re.sub(r'\[[\d:]+\]', '', transcript)
+    clean = re.sub(r'#.*', '', clean)
+    words = clean.split()
+    if len(words) < min_words:
+        return True
+    lower = transcript.lower()
+    # Check for known low-content patterns
+    meaningful_words = [w for w in words if len(w) > 2]
+    if len(meaningful_words) < 30:
+        return True
+    return False
+
+
+def _empty_result(transcript: str) -> tuple:
+    """Return an empty result tuple when there's nothing worth analyzing."""
+    return (
+        "# Analysis\n\n*Skipped — no meaningful audio content detected.*",
+        transcript,
+        "# Interview Intel\n\n*Skipped — no meaningful audio content detected.*",
+        CostTracker(),
+    )
+
+
 # ── Frame-based Gemini path ───────────────────────────────────────────────────
 
 def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
@@ -1379,11 +1415,19 @@ def _analyze_hybrid(gemini, qwen, video_path, filename, model, log,
     if not audio_path:
         transcript = "# Interview Transcript\n\n*No audio track detected in this video.*"
         call_offset = 0 if audio_only else 2
+        if _is_low_content_transcript(transcript):
+            log("  No audio detected — skipping all analysis.")
+            return _empty_result(transcript)
     elif use_groq:
         # ── Groq Whisper: fast + free ─────────────────────────────────────────
         transcribe_call_n = 1 if audio_only else 2
         log(f"Call {transcribe_call_n}/{total} — Transcribing audio (Groq Whisper, free)...")
         raw_transcript = transcribe_with_groq(audio_path, groq_key)
+
+        if _is_low_content_transcript(raw_transcript):
+            log("  Transcript has no meaningful content — skipping all analysis.")
+            empty_transcript = "# Interview Transcript\n\n*No meaningful audio content detected (muted or silent recording).*"
+            return _empty_result(empty_transcript)
 
         # ── Speaker labels ────────────────────────────────────────────────────
         label_call_n = 2 if audio_only else 3

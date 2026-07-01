@@ -244,9 +244,9 @@ def ingest_doc(index, gemini_client, text: str, meta: dict) -> int:
         }
         for i, chunk in enumerate(chunks)
     ]
-    # Upsert in batches of 100
-    for i in range(0, len(records), 100):
-        index.upsert_records(records=records[i:i+100], namespace=NAMESPACE)
+    # Upsert in batches (Pinecone upsert_records caps batch size at 96)
+    for i in range(0, len(records), 96):
+        index.upsert_records(records=records[i:i+96], namespace=NAMESPACE)
     return len(records)
 
 
